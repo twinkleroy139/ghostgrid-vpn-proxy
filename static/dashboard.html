@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GhostGrid // Operative Dashboard</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-auth-compat.js"></script>
+</head>
+<body>
+  <header class="hud-bar">
+    <div style="display:flex; align-items:center; gap:1.5rem;">
+      <a href="/browser" style="color:var(--neon-cyan); text-decoration:none; font-weight:700;">[⚡ GHOSTGRID CONSOLE]</a>
+      <span style="color:var(--text-muted); font-size:0.85rem;">TELEMETRY & PREFERENCES</span>
+    </div>
+    <div class="hud-status">
+      <span class="status-dot"></span>
+      <span id="userStatusLabel">OPERATIVE: DEV</span>
+      <a href="/browser" class="cyber-btn" style="padding:0.3rem 0.75rem; font-size:0.75rem; text-decoration:none; margin-left:1rem;">RETURN</a>
+    </div>
+  </header>
+
+  <main style="padding:2rem; max-width:1200px; margin:0 auto; width:100%; display:grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap:1.5rem;">
+    <!-- Telemetry Card -->
+    <div class="cyber-card" style="padding:1.5rem;">
+      <h3 style="color:var(--neon-cyan); margin-bottom:1rem; letter-spacing:1px;">SESSION TELEMETRY</h3>
+      <div style="display:flex; justify-content:space-between; margin-bottom:0.75rem;">
+        <span style="color:var(--text-muted);">REQUESTS:</span>
+        <span id="statRequests" style="color:var(--neon-green); font-weight:700;">0</span>
+      </div>
+      <div style="display:flex; justify-content:space-between; margin-bottom:1rem;">
+        <span style="color:var(--text-muted);">DATA TRANSFERRED:</span>
+        <span id="statMegabytes" style="color:var(--neon-green); font-weight:700;">0.00 MB</span>
+      </div>
+      <div style="border-top:1px dashed var(--border-neon); padding-top:1rem; display:flex; justify-content:space-between; align-items:center;">
+        <span style="color:var(--text-muted); font-size:0.85rem;">HISTORY LOGGING:</span>
+        <button id="toggleHistoryBtn" class="cyber-btn" style="padding:0.3rem 0.6rem; font-size:0.75rem;">ENABLED</button>
+      </div>
+    </div>
+
+    <!-- Bookmarks Card -->
+    <div class="cyber-card" style="padding:1.5rem;">
+      <h3 style="color:var(--neon-magenta); margin-bottom:1rem; letter-spacing:1px;">SAVED BOOKMARKS</h3>
+      <div id="bookmarkList" style="display:flex; flex-direction:column; gap:0.5rem; max-height:220px; overflow-y:auto; margin-bottom:1rem;">
+        <!-- Dynamic Bookmarks Render Here -->
+      </div>
+      <div style="display:flex; gap:0.5rem;">
+        <input type="text" id="bmTitle" class="cyber-input" placeholder="Label" style="width:35%;" />
+        <input type="text" id="bmUrl" class="cyber-input" placeholder="https://..." style="flex:1;" />
+        <button id="addBmBtn" class="cyber-btn" style="padding:0.4rem 0.8rem;">+ ADD</button>
+      </div>
+    </div>
+
+    <!-- History Log Card -->
+    <div class="cyber-card" style="padding:1.5rem; grid-column: 1 / -1;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+        <h3 style="color:var(--neon-amber); letter-spacing:1px;">TARGET HISTORY CACHE</h3>
+        <button id="clearHistoryBtn" class="cyber-btn cyber-btn-magenta" style="padding:0.3rem 0.75rem; font-size:0.75rem;">PURGE LOGS</button>
+      </div>
+      <div id="historyLogList" style="max-height:260px; overflow-y:auto; display:flex; flex-direction:column; gap:0.5rem; font-size:0.85rem;">
+        <!-- Dynamic History Logs Render Here -->
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/js/firebase_client.js"></script>
+  <script src="/static/js/auth.js"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", async () => {
+      const authHeader = await getAuthToken();
+
+      async function loadTelemetry() {
+        const res = await fetch("/api/user/usage", { headers: { "Authorization": authHeader } });
+        if (res.ok) {
+          const d = await res.json();
+          document.getElementById("statRequests").textContent = d.usage.requests;
+          document.getElementById("statMegabytes").textContent = `${d.usage.megabytes} MB`;
+        }
+      }
+
+      async function loadBookmarks() {
+        const res = await fetch("/api/user/bookmarks", { headers: { "Authorization": authHeader } });
+        if (res.ok) {
+          const d = await res.json();
+          const list = document.getElementById("bookmarkList");
+          list.innerHTML = "";
+          d.bookmarks.forEach(bm => {
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:0.4rem; background:rgba(0,0,0,0.4); border:1px solid rgba(0,240,255,0.15);";
+            row.innerHTML = `
+              <a href="/browser?q=${encodeURIComponent(bm.url)}" style="color:var(--neon-cyan); text-decoration:none;">⚡ ${bm.title}</a>
+              <button onclick="removeBm('${bm.url}')" style="background:transparent; border:none; color:var(--neon-magenta); cursor:pointer;">[X]</button>
+            `;
+            list.appendChild(row);
+          });
+        }
+      }
+
+      async function loadHistory() {
+        const res = await fetch("/api/user/history", { headers: { "Authorization": authHeader } });
+        if (res.ok) {
+          const d = await res.json();
+          const list = document.getElementById("historyLogList");
+          list.innerHTML = "";
+          if (d.history.length === 0) {
+            list.innerHTML = "<div style='color:var(--text-muted);'>No target records in active cache.</div>";
+            return;
+          }
+          d.history.forEach(h => {
+            const item = document.createElement("div");
+            item.style.cssText = "display:flex; justify-content:space-between; padding:0.4rem; border-bottom:1px solid rgba(255,255,255,0.05);";
+            item.innerHTML = `
+              <a href="/browser?q=${encodeURIComponent(h.url)}" style="color:var(--text-primary); text-decoration:none;">&gt; ${h.domain}</a>
+              <span style="color:var(--text-muted); font-size:0.75rem;">${new Date(h.timestamp * 1000).toLocaleTimeString()}</span>
+            `;
+            list.appendChild(item);
+          });
+        }
+      }
+
+      window.removeBm = async (url) => {
+        await fetch("/api/user/bookmarks", {
+          method: "DELETE",
+          headers: { "Authorization": authHeader, "Content-Type": "application/json" },
+          body: JSON.stringify({ url })
+        });
+        loadBookmarks();
+      };
+
+      document.getElementById("addBmBtn").addEventListener("click", async () => {
+        const title = document.getElementById("bmTitle").value.trim();
+        const url = document.getElementById("bmUrl").value.trim();
+        if (!url) return;
+        await fetch("/api/user/bookmarks", {
+          method: "POST",
+          headers: { "Authorization": authHeader, "Content-Type": "application/json" },
+          body: JSON.stringify({ title, url })
+        });
+        document.getElementById("bmTitle").value = "";
+        document.getElementById("bmUrl").value = "";
+        loadBookmarks();
+      });
+
+      document.getElementById("clearHistoryBtn").addEventListener("click", async () => {
+        await fetch("/api/user/history", {
+          method: "DELETE",
+          headers: { "Authorization": authHeader }
+        });
+        loadHistory();
+      });
+
+      loadTelemetry();
+      loadBookmarks();
+      loadHistory();
+    });
+  </script>
+</body>
+</html>

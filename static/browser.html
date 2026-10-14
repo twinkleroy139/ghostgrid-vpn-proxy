@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GhostGrid // Terminal Workspace</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-auth-compat.js"></script>
+</head>
+<body>
+  <header class="hud-bar">
+    <div style="display: flex; align-items: center; gap: 1rem;">
+      <a href="/" style="color: var(--neon-cyan); text-decoration: none; font-weight: 700;">[⚡ GHOSTGRID]</a>
+      <span style="color: var(--text-muted); font-size: 0.85rem;" id="activeUrlDisplay">READY FOR TARGET</span>
+    </div>
+    <div class="hud-status">
+      <span class="status-dot"></span>
+      <span id="userStatusLabel">OPERATIVE: DEV</span>
+      <button id="logoutBtn" class="cyber-btn cyber-btn-magenta" style="padding: 0.3rem 0.75rem; font-size: 0.75rem; margin-left: 1rem;">EXIT</button>
+    </div>
+  </header>
+
+  <div class="browser-viewport">
+    <div class="address-bar-container">
+      <input 
+        type="text" 
+        id="targetUrlInput" 
+        class="cyber-input address-input" 
+        placeholder="ENTER TARGET URL (e.g. example.com or wikipedia.org)" 
+        value="https://example.com"
+      />
+      <button id="launchBtn" class="cyber-btn">TRANSMIT</button>
+      <button id="reloadBtn" class="cyber-btn cyber-btn-magenta">RELOAD</button>
+    </div>
+
+    <div id="frameLoader" style="display: none; padding: 0.5rem; color: var(--neon-cyan); font-size: 0.85rem;">
+      &gt; RETRIEVING AND REWRITING UPSTREAM STREAM...
+    </div>
+
+    <iframe 
+      id="proxyFrame" 
+      class="proxy-frame" 
+      src="about:blank"
+      sandbox="allow-scripts allow-forms allow-same-origin allow-popups"
+    ></iframe>
+  </div>
+
+  <script src="/static/js/firebase_client.js"></script>
+  <script src="/static/js/auth.js"></script>
+  <script src="/static/js/browser.js"></script>
+</body>
+</html>

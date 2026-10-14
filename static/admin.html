@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GhostGrid // Admin Command Node</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-auth-compat.js"></script>
+</head>
+<body>
+  <header class="hud-bar">
+    <div style="display:flex; align-items:center; gap:1.5rem;">
+      <a href="/browser" style="color:var(--neon-magenta); text-decoration:none; font-weight:700;">[⚡ GHOSTGRID ADMIN]</a>
+      <span style="color:var(--text-muted); font-size:0.85rem;">NETWORK CONTROL MATRIX</span>
+    </div>
+    <div class="hud-status">
+      <span class="status-dot" style="background:var(--neon-magenta); box-shadow:0 0 8px var(--neon-magenta);"></span>
+      <span style="color:var(--neon-magenta);">LEVEL: CLEARANCE_0</span>
+      <a href="/browser" class="cyber-btn" style="padding:0.3rem 0.75rem; font-size:0.75rem; text-decoration:none; margin-left:1rem;">CONSOLE</a>
+    </div>
+  </header>
+
+  <main style="padding:2rem; max-width:1200px; margin:0 auto; width:100%; display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap:1.5rem;">
+    <!-- System Telemetry Overview -->
+    <div class="cyber-card" style="padding:1.5rem; border-color:var(--neon-magenta);">
+      <h3 style="color:var(--neon-magenta); margin-bottom:1rem; letter-spacing:1px;">SYSTEM TELEMETRY</h3>
+      <div style="display:flex; justify-content:space-between; margin-bottom:0.75rem;">
+        <span style="color:var(--text-muted);">TUNNEL REQUESTS:</span>
+        <span id="admRequests" style="color:var(--neon-cyan); font-weight:700;">0</span>
+      </div>
+      <div style="display:flex; justify-content:space-between; margin-bottom:0.75rem;">
+        <span style="color:var(--text-muted);">NETWORK VOLUME:</span>
+        <span id="admBandwidth" style="color:var(--neon-cyan); font-weight:700;">0 MB</span>
+      </div>
+      <div style="display:flex; justify-content:space-between;">
+        <span style="color:var(--text-muted);">PROHIBITED DOMAINS:</span>
+        <span id="admBlockedDomains" style="color:var(--neon-amber); font-weight:700;">0</span>
+      </div>
+    </div>
+
+    <!-- Operative Moderation Panel -->
+    <div class="cyber-card" style="padding:1.5rem;">
+      <h3 style="color:var(--neon-cyan); margin-bottom:1rem; letter-spacing:1px;">OPERATIVE BAN CONTROL</h3>
+      <div style="display:flex; gap:0.5rem; margin-bottom:1rem;">
+        <input type="text" id="targetUidInput" class="cyber-input" placeholder="Operative UID or Email" style="flex:1;" />
+        <button id="banBtn" class="cyber-btn cyber-btn-magenta" style="padding:0.4rem 0.8rem;">REVOKE</button>
+        <button id="unbanBtn" class="cyber-btn" style="padding:0.4rem 0.8rem;">RESTORE</button>
+      </div>
+      <div style="font-size:0.8rem; color:var(--text-muted); line-height:1.4;">
+        Active bans immediately sever tunneling access across all sessions.
+      </div>
+    </div>
+
+    <!-- Active Bans Registry -->
+    <div class="cyber-card" style="padding:1.5rem; grid-column:1 / -1;">
+      <h3 style="color:var(--neon-amber); margin-bottom:1rem; letter-spacing:1px;">REVOKED OPERATIVES REGISTRY</h3>
+      <div id="banListDisplay" style="display:flex; flex-direction:column; gap:0.5rem; max-height:220px; overflow-y:auto; font-size:0.85rem;">
+        <!-- Inactive/Banned accounts render here -->
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/js/firebase_client.js"></script>
+  <script src="/static/js/auth.js"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", async () => {
+      const authHeader = await getAuthToken();
+
+      async function refreshAdminData() {
+        try {
+          const res = await fetch("/api/admin/overview", { headers: { "Authorization": authHeader } });
+          if (res.ok) {
+            const data = await res.json();
+            document.getElementById("admRequests").textContent = data.total_requests;
+            document.getElementById("admBandwidth").textContent = `${data.total_bandwidth_mb} MB`;
+            document.getElementById("admBlockedDomains").textContent = data.blocked_domains_count;
+
+            const banContainer = document.getElementById("banListDisplay");
+            banContainer.innerHTML = "";
+            if (data.banned_users.length === 0) {
+              banContainer.innerHTML = "<div style='color:var(--text-muted);'>No operative identities currently under revocation.</div>";
+              return;
+            }
+            data.banned_users.forEach(uid => {
+              const row = document.createElement("div");
+              row.style.cssText = "display:flex; justify-content:space-between; padding:0.4rem; background:rgba(255,0,85,0.08); border-left:2px solid var(--neon-magenta);";
+              row.innerHTML = `<span style="color:var(--neon-magenta);">[BLOCKED] ${uid}</span>`;
+              banContainer.appendChild(row);
+            });
+          }
+        } catch (e) {
+          console.error("Failed loading admin metrics:", e);
+        }
+      }
+
+      document.getElementById("banBtn").addEventListener("click", async () => {
+        const uid = document.getElementById("targetUidInput").value.trim();
+        if (!uid) return;
+        const res = await fetch("/api/admin/ban", {
+          method: "POST",
+          headers: { "Authorization": authHeader, "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: uid })
+        });
+        const out = await res.json();
+        alert(out.message || out.detail);
+        document.getElementById("targetUidInput").value = "";
+        refreshAdminData();
+      });
+
+      document.getElementById("unbanBtn").addEventListener("click", async () => {
+        const uid = document.getElementById("targetUidInput").value.trim();
+        if (!uid) return;
+        const res = await fetch("/api/admin/unban", {
+          method: "POST",
+          headers: { "Authorization": authHeader, "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: uid })
+        });
+        const out = await res.json();
+        alert(out.message || out.detail);
+        document.getElementById("targetUidInput").value = "";
+        refreshAdminData();
+      });
+
+      refreshAdminData();
+    });
+  </script>
+</body>
+</html>
