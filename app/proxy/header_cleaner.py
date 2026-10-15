@@ -1,4 +1,4 @@
-from typing import Dict, List, Set
+from typing import Dict, Set
 
 # Headers that must NEVER be forwarded to upstream target servers (prevents leaks)
 HOP_BY_HOP_HEADERS: Set[str] = {
@@ -12,7 +12,7 @@ HOP_BY_HOP_HEADERS: Set[str] = {
     "upgrade",
 }
 
-# Request headers to strip to prevent tracking and leaking client infrastructure
+# Request headers to strip to prevent tracking, leaks, and compression mismatches
 BLOCKED_REQUEST_HEADERS: Set[str] = {
     "host",
     "x-forwarded-for",
@@ -23,6 +23,8 @@ BLOCKED_REQUEST_HEADERS: Set[str] = {
     "cf-connecting-ip",
     "cf-ray",
     "cf-visitor",
+    "accept-encoding",  # Strip so httpx automatically negotiates and decompresses content
+    "content-length",
 }
 
 # Response headers to strip so proxied sites can be framed, styled, and loaded safely
@@ -32,8 +34,8 @@ BLOCKED_RESPONSE_HEADERS: Set[str] = {
     "x-frame-options",
     "strict-transport-security",
     "clear-site-data",
-    "content-encoding",  # Stripped when httpx decompresses the payload body
-    "content-length",    # Body length will change after rewriting HTML
+    "content-encoding",  # Stripped because httpx yields decompressed text/data
+    "content-length",    # Stripped because DOM and CSS rewriting changes payload length
 }
 
 
@@ -43,6 +45,7 @@ def sanitize_request_headers(
     """
     Cleans incoming client headers before sending request upstream.
     Sets genuine host header and realistic User-Agent.
+    Does NOT manually inject Accept-Encoding so httpx can decompress natively.
     """
     sanitized: Dict[str, str] = {}
 
@@ -54,15 +57,13 @@ def sanitize_request_headers(
 
     # Set appropriate Host header for upstream destination
     sanitized["Host"] = target_host
-    sanitized["Accept-Encoding"] = "gzip, deflate"
-    
-    # Standardize User-Agent if not provided
-    if "user-agent" not in [k.lower() for k in sanitized.keys()]:
-        sanitized["User-Agent"] = (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36 GhostGrid/1.0"
-        )
+
+    # Standardize User-Agent
+    sanitized["User-Agent"] = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36 GhostGrid/1.0"
+    )
 
     return sanitized
 
