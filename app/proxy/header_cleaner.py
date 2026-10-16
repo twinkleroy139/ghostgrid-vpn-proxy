@@ -1,4 +1,5 @@
 from typing import Dict, Set
+from urllib.parse import urlparse
 
 HOP_BY_HOP_HEADERS: Set[str] = {
     "connection",
@@ -47,7 +48,13 @@ def sanitize_request_headers(
             continue
         sanitized[key] = value
 
+    # Set genuine Host header
     sanitized["Host"] = target_host
+
+    # Rewrite Origin & Referer to match upstream target (prevents YouTube 403 on /youtubei/v1/*)
+    target_origin = f"https://{target_host}"
+    sanitized["Origin"] = target_origin
+    sanitized["Referer"] = f"{target_origin}/"
 
     # Authentic Desktop Browser Fingerprint
     sanitized["User-Agent"] = (
@@ -57,7 +64,6 @@ def sanitize_request_headers(
     )
     sanitized["Accept-Language"] = "en-US,en;q=0.9"
 
-    # Forward or set appropriate client hints
     if "sec-ch-ua" not in sanitized:
         sanitized["sec-ch-ua"] = '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"'
         sanitized["sec-ch-ua-mobile"] = "?0"
@@ -75,5 +81,9 @@ def sanitize_response_headers(headers: Dict[str, str]) -> Dict[str, str]:
             continue
         sanitized[key] = value
 
+    # Ensure CORS allows the iframe context
+    sanitized["Access-Control-Allow-Origin"] = "*"
+    sanitized["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    sanitized["Access-Control-Allow-Headers"] = "*"
     sanitized["X-Proxy-Engine"] = "GhostGrid-Cyberpunk-Core"
     return sanitized

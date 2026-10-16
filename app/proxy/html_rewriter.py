@@ -1,5 +1,6 @@
 import re
 from bs4 import BeautifulSoup
+from urllib.parse import urlparse
 
 from app.proxy.css_rewriter import rewrite_css
 from app.proxy.js_injector import generate_client_interceptor_script
@@ -62,7 +63,7 @@ def rewrite_html(html_bytes: bytes, base_url: str, encoding: str = "utf-8", node
         if style_tag.string:
             style_tag.string = rewrite_css(style_tag.string, base_url)
 
-    # 7. Inject JS interceptor script into <head> with node awareness
+    # 7. Inject JS interceptor script into <head>
     interceptor_html = generate_client_interceptor_script(base_url, node=node)
     interceptor_soup = BeautifulSoup(interceptor_html, "html.parser")
 

@@ -1,8 +1,4 @@
 def generate_client_interceptor_script(base_url: str, node: str = "direct") -> str:
-    """
-    Generates inline JavaScript injected into proxied HTML pages.
-    Intercepts fetch, XMLHttpRequest, dynamic script insertions, and neutralizes Service Workers.
-    """
     return f"""
 <script id="ghostgrid-interceptor">
 (function() {{
@@ -30,7 +26,7 @@ def generate_client_interceptor_script(base_url: str, node: str = "direct") -> s
         return "/proxy/fetch?url=" + encodeTarget(url) + "&node=" + encodeURIComponent(CURRENT_NODE);
     }}
 
-    // 1. Monkey-patch window.fetch
+    // 1. Intercept window.fetch
     const originalFetch = window.fetch;
     window.fetch = function(resource, init) {{
         if (typeof resource === "string") {{
@@ -41,13 +37,25 @@ def generate_client_interceptor_script(base_url: str, node: str = "direct") -> s
         return originalFetch.call(this, resource, init);
     }};
 
-    // 2. Monkey-patch XMLHttpRequest
+    // 2. Intercept XMLHttpRequest
     const originalOpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(method, url, ...args) {{
         return originalOpen.call(this, method, proxyUrl(url), ...args);
     }};
 
-    // 3. Intercept dynamically created Script tags & Images
+    // 3. Intercept navigator.sendBeacon (prevents /error_204 404s)
+    if (navigator.sendBeacon) {{
+        const origSendBeacon = navigator.sendBeacon;
+        navigator.sendBeacon = function(url, data) {{
+            try {{
+                return origSendBeacon.call(this, proxyUrl(url), data);
+            }} catch(e) {{
+                return true;
+            }}
+        }};
+    }}
+
+    // 4. Intercept dynamic Script & Link element URLs
     const origSetAttribute = Element.prototype.setAttribute;
     Element.prototype.setAttribute = function(name, val) {{
         if ((name === "src" || name === "href") && typeof val === "string") {{
@@ -56,14 +64,14 @@ def generate_client_interceptor_script(base_url: str, node: str = "direct") -> s
         return origSetAttribute.call(this, name, val);
     }};
 
-    // 4. Neutralize ServiceWorker registrations that break in proxied iframes
+    // 5. Neutralize ServiceWorker registrations in sandbox
     if (navigator.serviceWorker) {{
         navigator.serviceWorker.register = function() {{
-            return Promise.reject(new Error("[GhostGrid] ServiceWorkers quarantined in sandbox."));
+            return Promise.reject(new Error("[GhostGrid] ServiceWorkers isolated."));
         }};
     }}
 
-    // 5. Intercept dynamic form submissions
+    // 6. Form submissions
     document.addEventListener("submit", function(e) {{
         const form = e.target;
         if (form && form.action && !form.action.includes("/proxy/fetch?url=")) {{
@@ -71,7 +79,7 @@ def generate_client_interceptor_script(base_url: str, node: str = "direct") -> s
         }}
     }}, true);
 
-    console.log("[GhostGrid] Interceptor Active for " + TARGET_BASE_URL + " via " + CURRENT_NODE);
+    console.log("[GhostGrid] Interceptor Active for: " + TARGET_BASE_URL);
 }})();
 </script>
 """
