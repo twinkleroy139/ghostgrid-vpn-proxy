@@ -1,21 +1,17 @@
-def generate_client_interceptor_script(base_url: str) -> str:
+def generate_client_interceptor_script(base_url: str, node: str = "direct") -> str:
     """
-    Generates inline JavaScript that is injected into proxied HTML pages.
-    Patches:
-    1. window.fetch() to intercept AJAX requests and redirect them via GhostGrid.
-    2. XMLHttpRequest.prototype.open() for legacy dynamic calls.
-    3. Form submission events to ensure form actions route through the proxy.
+    Generates inline JavaScript injected into proxied HTML pages.
+    Intercepts fetch, XMLHttpRequest, dynamic script insertions, and neutralizes Service Workers.
     """
     return f"""
 <script id="ghostgrid-interceptor">
 (function() {{
     const TARGET_BASE_URL = "{base_url}";
+    const CURRENT_NODE = "{node}";
 
-    // URL-safe Base64 encoder in client sandbox
     function encodeTarget(url) {{
         if (!url) return "";
         try {{
-            // Resolve relative path against current target origin
             const resolved = new URL(url, TARGET_BASE_URL).href;
             const utf8 = new TextEncoder().encode(resolved);
             let bin = "";
@@ -31,7 +27,7 @@ def generate_client_interceptor_script(base_url: str) -> str:
         const low = url.toLowerCase().trim();
         if (low.startsWith("data:") || low.startsWith("blob:") || low.startsWith("javascript:")) return url;
         if (url.includes("/proxy/fetch?url=")) return url;
-        return "/proxy/fetch?url=" + encodeTarget(url);
+        return "/proxy/fetch?url=" + encodeTarget(url) + "&node=" + encodeURIComponent(CURRENT_NODE);
     }}
 
     // 1. Monkey-patch window.fetch
@@ -51,7 +47,23 @@ def generate_client_interceptor_script(base_url: str) -> str:
         return originalOpen.call(this, method, proxyUrl(url), ...args);
     }};
 
-    // 3. Intercept dynamic form submissions created via script
+    // 3. Intercept dynamically created Script tags & Images
+    const origSetAttribute = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function(name, val) {{
+        if ((name === "src" || name === "href") && typeof val === "string") {{
+            val = proxyUrl(val);
+        }}
+        return origSetAttribute.call(this, name, val);
+    }};
+
+    // 4. Neutralize ServiceWorker registrations that break in proxied iframes
+    if (navigator.serviceWorker) {{
+        navigator.serviceWorker.register = function() {{
+            return Promise.reject(new Error("[GhostGrid] ServiceWorkers quarantined in sandbox."));
+        }};
+    }}
+
+    // 5. Intercept dynamic form submissions
     document.addEventListener("submit", function(e) {{
         const form = e.target;
         if (form && form.action && !form.action.includes("/proxy/fetch?url=")) {{
@@ -59,7 +71,7 @@ def generate_client_interceptor_script(base_url: str) -> str:
         }}
     }}, true);
 
-    console.log("[GhostGrid] Client Runtime Interceptor Active for: " + TARGET_BASE_URL);
+    console.log("[GhostGrid] Interceptor Active for " + TARGET_BASE_URL + " via " + CURRENT_NODE);
 }})();
 </script>
 """

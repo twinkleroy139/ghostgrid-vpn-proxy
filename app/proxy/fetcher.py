@@ -34,20 +34,26 @@ class ProxyFetcher:
         headers: Optional[Dict[str, str]] = None,
         content: Optional[bytes] = None,
         user_id: str = "guest_operative",
+        node: str = "direct",
     ) -> ProxyFetchResult:
         """
         Fetches an upstream target URL asynchronously.
-        Enforces SSRF and blocklist checks on the initial URL and on each redirect hop.
+        Routes through the chosen egress node and enforces SSRF / redirect constraints.
         """
-        # 1. Sanitize and verify initial URL before any outbound traffic
         current_url = sanitize_and_validate_target_url(target_url)
         incoming_headers = headers or {}
         redirect_count = 0
 
+        # Resolve upstream proxy URL for selected node
+        node_info = self.settings.available_nodes.get(node, self.settings.available_nodes["direct"])
+        proxy_mount = node_info.get("url")
+
         async with httpx.AsyncClient(
+            proxy=proxy_mount,
             follow_redirects=False,
-            timeout=httpx.Timeout(self.settings.REQUEST_TIMEOUT_SECONDS),
+            timeout=httpx.Timeout(self.settings.REQUEST_TIMEOUT_SECONDS, connect=10.0),
             verify=True,
+            http2=True,
         ) as client:
             while True:
                 parsed = urlparse(current_url)
@@ -70,7 +76,6 @@ class ProxyFetcher:
                 raw_resp_headers = dict(response.headers)
                 cookie_jar.save_response_cookies(user_id, current_url, raw_resp_headers)
 
-                # Check payload ceiling
                 raw_bytes = response.content
                 if len(raw_bytes) > self.settings.MAX_RESPONSE_SIZE_BYTES:
                     raise ValueError(
@@ -78,7 +83,7 @@ class ProxyFetcher:
                         f"{self.settings.MAX_RESPONSE_SIZE_BYTES} bytes."
                     )
 
-                # 2. Manual redirect check with SSRF re-inspection
+                # Manual redirect handling with SSRF re-verification
                 if response.is_redirect and "location" in response.headers:
                     redirect_count += 1
                     if redirect_count > self.settings.MAX_REDIRECTS:
@@ -87,7 +92,6 @@ class ProxyFetcher:
                     location = response.headers["location"]
                     next_url = urljoin(current_url, location)
 
-                    # Re-verify the redirect URL to prevent SSRF via open redirect attacks
                     current_url = sanitize_and_validate_target_url(next_url)
                     method = "GET"
                     content = None

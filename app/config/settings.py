@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Optional
+from typing import Dict, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,8 +25,25 @@ class Settings(BaseSettings):
 
     # Core Proxy Engine Bounds
     MAX_REDIRECTS: int = 5
-    REQUEST_TIMEOUT_SECONDS: float = 15.0
-    MAX_RESPONSE_SIZE_BYTES: int = 10485760  # 10 MB limit
+    REQUEST_TIMEOUT_SECONDS: float = 20.0
+    MAX_RESPONSE_SIZE_BYTES: int = 25165824  # Increased to 24 MB for modern web bundles
+
+    # VPN / Egress Gateway Registry
+    # Format: {"node_id": {"name": "Country / City", "proxy_url": "socks5://... or http://..."}}
+    PROXY_NODE_US: Optional[str] = None
+    PROXY_NODE_DE: Optional[str] = None
+    PROXY_NODE_SG: Optional[str] = None
+    PROXY_NODE_UK: Optional[str] = None
+
+    @property
+    def available_nodes(self) -> Dict[str, dict]:
+        return {
+            "direct": {"name": "⚡ Direct Uplink (Local/Cloud)", "url": None},
+            "us": {"name": "🇺🇸 United States (CyberNode-US)", "url": self.PROXY_NODE_US},
+            "de": {"name": "🇩🇪 Germany (CyberNode-DE)", "url": self.PROXY_NODE_DE},
+            "sg": {"name": "🇸🇬 Singapore (CyberNode-SG)", "url": self.PROXY_NODE_SG},
+            "uk": {"name": "🇬🇧 United Kingdom (CyberNode-UK)", "url": self.PROXY_NODE_UK},
+        }
 
 
 @lru_cache()

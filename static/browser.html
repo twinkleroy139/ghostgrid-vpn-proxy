@@ -14,6 +14,19 @@
       <a href="/" style="color: var(--neon-cyan); text-decoration: none; font-weight: 700;">[⚡ GHOSTGRID]</a>
       <span style="color: var(--text-muted); font-size: 0.85rem;" id="activeUrlDisplay">READY FOR TARGET</span>
     </div>
+
+    <!-- VPN / Gateway Node Selector HUD -->
+    <div style="display: flex; align-items: center; gap: 0.5rem;">
+      <label for="vpnNodeSelect" style="color: var(--neon-cyan); font-size: 0.75rem; letter-spacing: 1px;">VPN NODE:</label>
+      <select id="vpnNodeSelect" class="cyber-input" style="padding: 0.25rem 0.5rem; font-size: 0.8rem; background: #070b12; color: var(--neon-cyan); border: 1px solid var(--neon-cyan);">
+        <option value="direct">⚡ Direct Uplink (Local/Cloud)</option>
+        <option value="us">🇺🇸 United States</option>
+        <option value="de">🇩🇪 Germany</option>
+        <option value="sg">🇸🇬 Singapore</option>
+        <option value="uk">🇬🇧 United Kingdom</option>
+      </select>
+    </div>
+
     <div class="hud-status">
       <span class="status-dot"></span>
       <span id="userStatusLabel">OPERATIVE: DEV</span>
@@ -27,8 +40,8 @@
         type="text" 
         id="targetUrlInput" 
         class="cyber-input address-input" 
-        placeholder="ENTER TARGET URL (e.g. example.com or wikipedia.org)" 
-        value="https://example.com"
+        placeholder="ENTER TARGET URL (e.g. youtube.com or wikipedia.org)" 
+        value="https://www.youtube.com"
       />
       <button id="launchBtn" class="cyber-btn">TRANSMIT</button>
       <button id="reloadBtn" class="cyber-btn cyber-btn-magenta">RELOAD</button>
@@ -42,7 +55,7 @@
       id="proxyFrame" 
       class="proxy-frame" 
       src="about:blank"
-      sandbox="allow-scripts allow-forms allow-same-origin allow-popups"
+      sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-modals allow-downloads"
     ></iframe>
   </div>
 

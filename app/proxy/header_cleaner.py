@@ -1,6 +1,5 @@
 from typing import Dict, Set
 
-# Headers that must NEVER be forwarded to upstream target servers (prevents leaks)
 HOP_BY_HOP_HEADERS: Set[str] = {
     "connection",
     "keep-alive",
@@ -12,7 +11,6 @@ HOP_BY_HOP_HEADERS: Set[str] = {
     "upgrade",
 }
 
-# Request headers to strip to prevent tracking, leaks, and compression mismatches
 BLOCKED_REQUEST_HEADERS: Set[str] = {
     "host",
     "x-forwarded-for",
@@ -23,30 +21,24 @@ BLOCKED_REQUEST_HEADERS: Set[str] = {
     "cf-connecting-ip",
     "cf-ray",
     "cf-visitor",
-    "accept-encoding",  # Strip so httpx automatically negotiates and decompresses content
+    "accept-encoding",
     "content-length",
 }
 
-# Response headers to strip so proxied sites can be framed, styled, and loaded safely
 BLOCKED_RESPONSE_HEADERS: Set[str] = {
     "content-security-policy",
     "content-security-policy-report-only",
     "x-frame-options",
     "strict-transport-security",
     "clear-site-data",
-    "content-encoding",  # Stripped because httpx yields decompressed text/data
-    "content-length",    # Stripped because DOM and CSS rewriting changes payload length
+    "content-encoding",
+    "content-length",
 }
 
 
 def sanitize_request_headers(
     headers: Dict[str, str], target_host: str
 ) -> Dict[str, str]:
-    """
-    Cleans incoming client headers before sending request upstream.
-    Sets genuine host header and realistic User-Agent.
-    Does NOT manually inject Accept-Encoding so httpx can decompress natively.
-    """
     sanitized: Dict[str, str] = {}
 
     for key, value in headers.items():
@@ -55,24 +47,26 @@ def sanitize_request_headers(
             continue
         sanitized[key] = value
 
-    # Set appropriate Host header for upstream destination
     sanitized["Host"] = target_host
 
-    # Standardize User-Agent
+    # Authentic desktop Chrome signature without custom scraper flags
     sanitized["User-Agent"] = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36 GhostGrid/1.0"
+        "Chrome/124.0.0.0 Safari/537.36"
     )
+    sanitized["Accept"] = (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+    )
+    sanitized["Accept-Language"] = "en-US,en;q=0.9"
+    sanitized["Sec-Fetch-Dest"] = "document"
+    sanitized["Sec-Fetch-Mode"] = "navigate"
+    sanitized["Sec-Fetch-Site"] = "none"
 
     return sanitized
 
 
 def sanitize_response_headers(headers: Dict[str, str]) -> Dict[str, str]:
-    """
-    Cleans upstream response headers before sending back to client browser.
-    Removes frame-busting, CSP barriers, and stale encoding lengths.
-    """
     sanitized: Dict[str, str] = {}
 
     for key, value in headers.items():
@@ -81,6 +75,5 @@ def sanitize_response_headers(headers: Dict[str, str]) -> Dict[str, str]:
             continue
         sanitized[key] = value
 
-    # Add custom GhostGrid debugging identifier
     sanitized["X-Proxy-Engine"] = "GhostGrid-Cyberpunk-Core"
     return sanitized

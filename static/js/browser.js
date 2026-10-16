@@ -1,13 +1,11 @@
 /**
  * GhostGrid Browser Workspace Controller
- * Handles URL encoding, target site launching, iframe history, and navigation controls.
+ * Handles URL encoding, VPN node routing, and iframe lifecycle.
  */
 
-// URL-safe Base64 encoder matching Python backend url_encoder.py
 function encodeTargetUrl(url) {
   if (!url) return "";
   const cleanUrl = url.trim();
-  // Ensure protocol is attached if user enters bare domain
   const finalUrl = /^https?:\/\//i.test(cleanUrl) ? cleanUrl : `https://${cleanUrl}`;
   const utf8Bytes = new TextEncoder().encode(finalUrl);
   let binary = "";
@@ -22,20 +20,47 @@ document.addEventListener("DOMContentLoaded", () => {
   const proxyFrame = document.getElementById("proxyFrame");
   const frameLoader = document.getElementById("frameLoader");
   const activeUrlDisplay = document.getElementById("activeUrlDisplay");
+  const vpnNodeSelect = document.getElementById("vpnNodeSelect");
+
+  // Load and populate available nodes from backend
+  async function loadVpnNodes() {
+    try {
+      const res = await fetch("/proxy/nodes");
+      if (res.ok) {
+        const data = await res.json();
+        vpnNodeSelect.innerHTML = "";
+        data.nodes.forEach((n) => {
+          const opt = document.createElement("option");
+          opt.value = n.id;
+          opt.textContent = n.name + (n.configured ? "" : " [UNCONFIGURED]");
+          vpnNodeSelect.appendChild(opt);
+        });
+        const savedNode = localStorage.getItem("ghostgrid_vpn_node") || "direct";
+        vpnNodeSelect.value = savedNode;
+      }
+    } catch (e) {
+      console.warn("Could not load dynamic nodes, using defaults.");
+    }
+  }
+
+  vpnNodeSelect.addEventListener("change", () => {
+    localStorage.setItem("ghostgrid_vpn_node", vpnNodeSelect.value);
+  });
 
   function navigateTo(url) {
     if (!url) return;
     const token = encodeTargetUrl(url);
     if (!token) return;
 
-    if (frameLoader) frameLoader.style.display = "block";
-    if (activeUrlDisplay) activeUrlDisplay.textContent = url;
+    const selectedNode = vpnNodeSelect ? vpnNodeSelect.value : "direct";
 
-    // Load target through GhostGrid proxy endpoint
-    proxyFrame.src = `/proxy/fetch?url=${token}`;
+    if (frameLoader) frameLoader.style.display = "block";
+    if (activeUrlDisplay) activeUrlDisplay.textContent = `${url} [${selectedNode.toUpperCase()}]`;
+
+    // Load through GhostGrid proxy endpoint with node indicator
+    proxyFrame.src = `/proxy/fetch?url=${token}&node=${encodeURIComponent(selectedNode)}`;
   }
 
-  // Handle URL form submit / enter key
   if (launchBtn && urlInput) {
     launchBtn.addEventListener("click", () => navigateTo(urlInput.value));
     urlInput.addEventListener("keydown", (e) => {
@@ -46,7 +71,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Reload current iframe
   if (reloadBtn && proxyFrame) {
     reloadBtn.addEventListener("click", () => {
       if (proxyFrame.src && proxyFrame.src !== "about:blank") {
@@ -56,18 +80,18 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Hide loader indicator once iframe content finishes rendering
   if (proxyFrame) {
     proxyFrame.addEventListener("load", () => {
       if (frameLoader) frameLoader.style.display = "none";
     });
   }
 
-  // Check URL params for direct launch e.g. /browser?q=example.com
-  const params = new URLSearchParams(window.location.search);
-  const initialTarget = params.get("q");
-  if (initialTarget && urlInput) {
-    urlInput.value = initialTarget;
-    navigateTo(initialTarget);
-  }
+  loadVpnNodes().then(() => {
+    const params = new URLSearchParams(window.location.search);
+    const initialTarget = params.get("q");
+    if (initialTarget && urlInput) {
+      urlInput.value = initialTarget;
+      navigateTo(initialTarget);
+    }
+  });
 });
