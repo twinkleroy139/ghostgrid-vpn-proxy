@@ -15,15 +15,17 @@
       <span style="color: var(--text-muted); font-size: 0.85rem;" id="activeUrlDisplay">READY FOR TARGET</span>
     </div>
 
-    <!-- VPN / Gateway Node Selector HUD -->
-    <div style="display: flex; align-items: center; gap: 0.5rem;">
-      <label for="vpnNodeSelect" style="color: var(--neon-cyan); font-size: 0.75rem; letter-spacing: 1px;">VPN NODE:</label>
-      <select id="vpnNodeSelect" class="cyber-input" style="padding: 0.25rem 0.5rem; font-size: 0.8rem; background: #070b12; color: var(--neon-cyan); border: 1px solid var(--neon-cyan);">
-        <option value="direct">⚡ Direct Uplink (Local/Cloud)</option>
-        <option value="us">🇺🇸 United States</option>
-        <option value="de">🇩🇪 Germany</option>
-        <option value="sg">🇸🇬 Singapore</option>
-        <option value="uk">🇬🇧 United Kingdom</option>
+
+    <!-- VPN / Gateway Node Selector HUD with Live Status -->
+    <div style="display: flex; align-items: center; gap: 0.6rem;">
+      <span id="vpnStatusDot" class="status-dot" style="background: var(--neon-cyan); box-shadow: 0 0 8px var(--neon-cyan);"></span>
+      <label for="vpnNodeSelect" style="color: var(--neon-cyan); font-size: 0.75rem; letter-spacing: 1px; font-weight: bold;">UPLINK:</label>
+      <select id="vpnNodeSelect" class="cyber-input" style="padding: 0.25rem 0.6rem; font-size: 0.8rem; background: #070b12; color: var(--neon-cyan); border: 1px solid var(--neon-cyan); cursor: pointer;">
+        <option value="direct">⚡ DIRECT (LOCAL / CLOUD) - CONNECTED</option>
+        <option value="us">🇺🇸 US NODE (NEW YORK)</option>
+        <option value="de">🇩🇪 DE NODE (FRANKFURT)</option>
+        <option value="sg">🇸🇬 SG NODE (SINGAPORE)</option>
+        <option value="uk">🇬🇧 UK NODE (LONDON)</option>
       </select>
     </div>
 

@@ -49,19 +49,19 @@ def sanitize_request_headers(
 
     sanitized["Host"] = target_host
 
-    # Authentic desktop Chrome signature without custom scraper flags
+    # Authentic Desktop Browser Fingerprint
     sanitized["User-Agent"] = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     )
-    sanitized["Accept"] = (
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-    )
     sanitized["Accept-Language"] = "en-US,en;q=0.9"
-    sanitized["Sec-Fetch-Dest"] = "document"
-    sanitized["Sec-Fetch-Mode"] = "navigate"
-    sanitized["Sec-Fetch-Site"] = "none"
+
+    # Forward or set appropriate client hints
+    if "sec-ch-ua" not in sanitized:
+        sanitized["sec-ch-ua"] = '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"'
+        sanitized["sec-ch-ua-mobile"] = "?0"
+        sanitized["sec-ch-ua-platform"] = '"Windows"'
 
     return sanitized
 
