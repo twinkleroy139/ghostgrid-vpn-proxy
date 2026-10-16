@@ -26,7 +26,6 @@ settings = get_settings()
 
 @router.get("/nodes")
 async def list_vpn_nodes():
-    """Returns available VPN / Egress connection nodes for the HUD dropdown."""
     nodes = [
         {"id": k, "name": v["name"], "configured": v["url"] is not None or k == "direct"}
         for k, v in settings.available_nodes.items()
@@ -52,12 +51,17 @@ async def proxy_fetch_endpoint(
     if not raw_target_url:
         return render_cyberpunk_error_page(400, "INVALID TARGET IDENTIFIER", "The target URL token was malformed.")
 
-    if is_ad_or_tracker(raw_target_url):
+    # 1. Silently drop ad/trackers and Google passive auth traps
+    if is_ad_or_tracker(raw_target_url) or "accounts.google.com/ServiceLogin" in raw_target_url:
+        return Response(status_code=204)
+
+    # 2. Silently handle sourcemaps to prevent console clutter
+    if raw_target_url.endswith(".map"):
         return Response(status_code=204)
 
     client_headers = dict(request.headers)
 
-    # Partial Content & Video Streaming Pipeline
+    # 3. Stream range and media requests
     if "range" in [k.lower() for k in client_headers.keys()]:
         try:
             node_url = settings.available_nodes.get(node, {}).get("url")
@@ -71,7 +75,7 @@ async def proxy_fetch_endpoint(
         except Exception as exc:
             return render_cyberpunk_error_page(502, "STREAM TUNNEL COLLAPSE", str(exc), raw_target_url)
 
-    # Asset Cache Lookup
+    # 4. Cache check for static assets
     cache_key = f"{node}:{raw_target_url}"
     if request.method == "GET":
         cached_result = asset_cache.get(cache_key)
@@ -80,6 +84,7 @@ async def proxy_fetch_endpoint(
             log_proxy_access(user_id, raw_target_url, 200, len(content_bytes))
             return Response(content=content_bytes, media_type=c_type)
 
+    # 5. Outbound request fetch
     try:
         body_bytes: Optional[bytes] = None
         if request.method in ("POST", "PUT", "PATCH"):
@@ -100,7 +105,7 @@ async def proxy_fetch_endpoint(
         usage_service.record_usage(user_id, payload_size)
         log_proxy_access(user_id, result.final_url, result.status_code, payload_size)
 
-        # HTML Processing & DOM Rewriting
+        # HTML Processing
         if "text/html" in content_type:
             history_service.add_entry(user_id, result.final_url)
             rewritten_html = rewrite_html(result.content, result.final_url, node=node)
@@ -110,7 +115,7 @@ async def proxy_fetch_endpoint(
                 headers=result.headers,
             )
 
-        # CSS Stylesheet Processing
+        # CSS Processing
         if "text/css" in content_type:
             try:
                 css_text = result.content.decode("utf-8", errors="replace")
@@ -125,6 +130,7 @@ async def proxy_fetch_endpoint(
             except Exception:
                 pass
 
+        # Static media assets cache (JS, images, fonts)
         if any(t in content_type for t in ("image/", "font/", "javascript", "application/json")):
             asset_cache.set(cache_key, result.content, content_type)
 

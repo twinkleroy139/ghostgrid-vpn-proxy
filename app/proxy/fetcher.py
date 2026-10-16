@@ -12,8 +12,6 @@ from app.security.sanitizer import sanitize_and_validate_target_url
 
 @dataclass
 class ProxyFetchResult:
-    """Holds the result of a fetched upstream web resource."""
-
     status_code: int
     headers: Dict[str, str]
     content: bytes
@@ -22,8 +20,6 @@ class ProxyFetchResult:
 
 
 class ProxyFetcher:
-    """Async HTTP engine with multi-hop SSRF validation and redirect loop containment."""
-
     def __init__(self):
         self.settings = get_settings()
 
@@ -36,15 +32,10 @@ class ProxyFetcher:
         user_id: str = "guest_operative",
         node: str = "direct",
     ) -> ProxyFetchResult:
-        """
-        Fetches an upstream target URL asynchronously.
-        Routes through the chosen egress node and enforces SSRF / redirect constraints.
-        """
         current_url = sanitize_and_validate_target_url(target_url)
         incoming_headers = headers or {}
         redirect_count = 0
 
-        # Resolve upstream proxy URL for selected node
         node_info = self.settings.available_nodes.get(node, self.settings.available_nodes["direct"])
         proxy_mount = node_info.get("url")
 
@@ -60,7 +51,6 @@ class ProxyFetcher:
                 target_host = parsed.netloc
                 clean_headers = sanitize_request_headers(incoming_headers, target_host)
 
-                # Attach domain cookies if available
                 stored_cookie = cookie_jar.get_cookie_header(user_id, current_url)
                 if stored_cookie:
                     clean_headers["Cookie"] = stored_cookie
@@ -72,7 +62,6 @@ class ProxyFetcher:
                     content=content if method in ("POST", "PUT", "PATCH") else None,
                 )
 
-                # Store incoming cookies from response
                 raw_resp_headers = dict(response.headers)
                 cookie_jar.save_response_cookies(user_id, current_url, raw_resp_headers)
 
@@ -83,7 +72,6 @@ class ProxyFetcher:
                         f"{self.settings.MAX_RESPONSE_SIZE_BYTES} bytes."
                     )
 
-                # Manual redirect handling with SSRF re-verification
                 if response.is_redirect and "location" in response.headers:
                     redirect_count += 1
                     if redirect_count > self.settings.MAX_REDIRECTS:

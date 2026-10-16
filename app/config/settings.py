@@ -26,10 +26,9 @@ class Settings(BaseSettings):
     # Core Proxy Engine Bounds
     MAX_REDIRECTS: int = 5
     REQUEST_TIMEOUT_SECONDS: float = 20.0
-    MAX_RESPONSE_SIZE_BYTES: int = 25165824  # Increased to 24 MB for modern web bundles
+    MAX_RESPONSE_SIZE_BYTES: int = 36700160  # 35 MB to accommodate heavy client-side scripts
 
     # VPN / Egress Gateway Registry
-    # Format: {"node_id": {"name": "Country / City", "proxy_url": "socks5://... or http://..."}}
     PROXY_NODE_US: Optional[str] = None
     PROXY_NODE_DE: Optional[str] = None
     PROXY_NODE_SG: Optional[str] = None
@@ -48,5 +47,4 @@ class Settings(BaseSettings):
 
 @lru_cache()
 def get_settings() -> Settings:
-    """Returns a cached singleton instance of Settings."""
     return Settings()
