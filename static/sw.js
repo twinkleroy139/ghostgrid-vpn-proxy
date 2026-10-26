@@ -1,14 +1,20 @@
 /**
- * GhostGrid Client-Side Service Worker Engine
+ * GhostGrid Client-Side Service Worker (v2)
+ *
+ * Tunnels every cross-origin request made by a proxied page through
+ * /proxy/fetch. GhostGrid's own origin (pages, /static, /api, /proxy)
+ * passes through untouched.
+ *
+ * NOTE: navigations (link clicks, nested iframes, location changes) are NOT
+ * seen by this worker, because navigation requests are routed to the SW whose
+ * scope matches the destination. The injected page shim handles those.
  */
 
-self.addEventListener("install", (event) => {
-  self.skipWaiting();
-});
+const PROXY_ENDPOINT = "/proxy/fetch";
+const NODE = "direct"; // TODO: SW cannot read localStorage; pass node via postMessage later
 
-self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
-});
+self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
 function encodeUrl(url) {
   const utf8 = new TextEncoder().encode(url);
@@ -18,31 +24,42 @@ function encodeUrl(url) {
 }
 
 self.addEventListener("fetch", (event) => {
-  const reqUrl = event.request.url;
+  const req = event.request;
 
-  // Let local GhostGrid assets, APIs, and endpoints pass through directly
-  if (
-    reqUrl.includes("/static/") ||
-    reqUrl.includes("/api/") ||
-    reqUrl.includes("/proxy/") ||
-    reqUrl.includes("/browser") ||
-    reqUrl.endsWith("/sw.js") ||
-    reqUrl.endsWith("/favicon.ico")
-  ) {
+  let url;
+  try {
+    url = new URL(req.url);
+  } catch (_) {
     return;
   }
 
-  const node = "direct";
-  const proxiedEndpoint = `/proxy/fetch?url=${encodeUrl(reqUrl)}&node=${node}`;
+  if (url.protocol !== "http:" && url.protocol !== "https:") return;
 
-  event.respondWith(
-    fetch(proxiedEndpoint, {
-      method: event.request.method,
-      headers: event.request.headers,
-      body: event.request.method !== "GET" && event.request.method !== "HEAD" ? event.request.body : undefined,
-    }).catch(() => {
-      // Must pass null body when returning status 204
-      return new Response(null, { status: 204 });
-    })
-  );
+  // Origin check (not substring matching): only GhostGrid itself is exempt.
+  if (url.origin === self.location.origin) return;
+
+  event.respondWith(tunnel(req));
 });
+
+async function tunnel(req) {
+  const endpoint = `${PROXY_ENDPOINT}?url=${encodeUrl(req.url)}&node=${NODE}`;
+  try {
+    const hasBody = req.method !== "GET" && req.method !== "HEAD";
+    // Buffer the body: forwarding a ReadableStream requires `duplex: "half"`
+    const body = hasBody ? await req.arrayBuffer() : undefined;
+
+    return await fetch(endpoint, {
+      method: req.method,
+      headers: req.headers,
+      body,
+      credentials: "same-origin",
+    });
+  } catch (err) {
+    console.warn("[GhostGrid SW] tunnel failed:", req.url, err);
+    // 502 (not 204) so failures are visible in DevTools while debugging
+    return new Response("GhostGrid tunnel error", {
+      status: 502,
+      headers: { "Content-Type": "text/plain" },
+    });
+  }
+}

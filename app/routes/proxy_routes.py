@@ -1,3 +1,4 @@
+from app.proxy.shim import inject_into_html
 from typing import Optional
 import httpx
 from fastapi import APIRouter, Depends, Query, Request, Response, WebSocket
@@ -107,65 +108,16 @@ async def proxy_fetch_endpoint(
 
 
         if "text/html" in content_type:
-            history_service.add_entry(user_id, result.final_url)
             html_text = result.content.decode("utf-8", errors="replace")
+            html_text = inject_into_html(html_text, result.final_url, node)
+            headers = {k: v for k, v in result.headers.items()
+                if k.lower() not in ("cache-control", "etag", "last-modified")}
+            headers["Cache-Control"] = "no-store"   # stops stale shims while debugging
+            return HTMLResponse(content=html_text, status_code=result.status_code, headers=headers)
             
-            # History and presentation shim script to prevent origin cross-domain SecurityError
-            shim_script = """
-<script id="ghostgrid-runtime-shim">
-(function() {
-    // 1. Safe History wrapper (prevents SecurityError on SPA replaceState/pushState)
-    const origReplaceState = history.replaceState;
-    const origPushState = history.pushState;
-    
-    history.replaceState = function(state, unused, url) {
-        try {
-            return origReplaceState.apply(this, arguments);
-        } catch(e) {
-            // Suppress cross-origin replacement failure in proxied iframe
-            return null;
-        }
-    };
-    
-    history.pushState = function(state, unused, url) {
-        try {
-            return origPushState.apply(this, arguments);
-        } catch(e) {
-            return null;
-        }
-    };
-
-    // 2. Mock PresentationRequest if browser sandbox lacks flag
-    if (typeof window.PresentationRequest === "undefined") {
-        window.PresentationRequest = function() {
-            return {
-                start: () => Promise.reject(new Error("Presentation disabled")),
-                reconnect: () => Promise.reject(new Error("Presentation disabled")),
-                addEventListener: () => {}
-            };
-        };
-    }
-})();
-</script>
-"""
-            base_tag = f'<base href="{result.final_url}">'
-            injection = f"{base_tag}\n{shim_script}"
-
-            if "<head>" in html_text:
-                html_text = html_text.replace("<head>", f"<head>{injection}", 1)
-            elif "<HEAD>" in html_text:
-                html_text = html_text.replace("<HEAD>", f"<HEAD>{injection}", 1)
-            else:
-                html_text = injection + html_text
-
-            return HTMLResponse(
-                content=html_text,
-                status_code=result.status_code,
-                headers=result.headers,
-            )
 
 
-            
+
         return Response(
             content=result.content,
             status_code=result.status_code,
