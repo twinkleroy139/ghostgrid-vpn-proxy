@@ -8,9 +8,7 @@ from app.middleware.auth import get_current_user
 from app.middleware.error_handler import render_cyberpunk_error_page
 from app.middleware.rate_limit import check_rate_limit
 from app.proxy.cache_manager import asset_cache
-from app.proxy.css_rewriter import rewrite_css
 from app.proxy.fetcher import ProxyFetcher
-from app.proxy.html_rewriter import rewrite_html
 from app.proxy.stream_handler import stream_upstream_content
 from app.proxy.url_encoder import decode_url
 from app.proxy.ws_proxy import proxy_websocket
@@ -51,17 +49,16 @@ async def proxy_fetch_endpoint(
     if not raw_target_url:
         return render_cyberpunk_error_page(400, "INVALID TARGET IDENTIFIER", "The target URL token was malformed.")
 
-    # 1. Silently drop ad/trackers and Google passive auth traps
+    # Drop trackers and auth redirects silently
     if is_ad_or_tracker(raw_target_url) or "accounts.google.com/ServiceLogin" in raw_target_url:
         return Response(status_code=204)
 
-    # 2. Silently handle sourcemaps to prevent console clutter
     if raw_target_url.endswith(".map"):
         return Response(status_code=204)
 
     client_headers = dict(request.headers)
 
-    # 3. Stream range and media requests
+    # Media Range / Streaming
     if "range" in [k.lower() for k in client_headers.keys()]:
         try:
             node_url = settings.available_nodes.get(node, {}).get("url")
@@ -75,7 +72,7 @@ async def proxy_fetch_endpoint(
         except Exception as exc:
             return render_cyberpunk_error_page(502, "STREAM TUNNEL COLLAPSE", str(exc), raw_target_url)
 
-    # 4. Cache check for static assets
+    # Static Cache Lookup
     cache_key = f"{node}:{raw_target_url}"
     if request.method == "GET":
         cached_result = asset_cache.get(cache_key)
@@ -84,7 +81,6 @@ async def proxy_fetch_endpoint(
             log_proxy_access(user_id, raw_target_url, 200, len(content_bytes))
             return Response(content=content_bytes, media_type=c_type)
 
-    # 5. Outbound request fetch
     try:
         body_bytes: Optional[bytes] = None
         if request.method in ("POST", "PUT", "PATCH"):
@@ -105,34 +101,27 @@ async def proxy_fetch_endpoint(
         usage_service.record_usage(user_id, payload_size)
         log_proxy_access(user_id, result.final_url, result.status_code, payload_size)
 
-        # HTML Processing
+        # Cache valid assets
+        if result.status_code == 200 and any(t in content_type for t in ("image/", "font/", "javascript", "text/css", "application/json")):
+            asset_cache.set(cache_key, result.content, content_type)
+
         if "text/html" in content_type:
             history_service.add_entry(user_id, result.final_url)
-            rewritten_html = rewrite_html(result.content, result.final_url, node=node)
+            # Inject <base> tag so relative paths resolve cleanly to upstream origin
+            html_text = result.content.decode("utf-8", errors="replace")
+            base_tag = f'<base href="{result.final_url}">'
+            if "<head>" in html_text:
+                html_text = html_text.replace("<head>", f"<head>{base_tag}", 1)
+            elif "<HEAD>" in html_text:
+                html_text = html_text.replace("<HEAD>", f"<HEAD>{base_tag}", 1)
+            else:
+                html_text = base_tag + html_text
+
             return HTMLResponse(
-                content=rewritten_html,
+                content=html_text,
                 status_code=result.status_code,
                 headers=result.headers,
             )
-
-        # CSS Processing
-        if "text/css" in content_type:
-            try:
-                css_text = result.content.decode("utf-8", errors="replace")
-                rewritten_css = rewrite_css(css_text, result.final_url).encode("utf-8")
-                asset_cache.set(cache_key, rewritten_css, "text/css")
-                return Response(
-                    content=rewritten_css,
-                    status_code=result.status_code,
-                    headers=result.headers,
-                    media_type="text/css",
-                )
-            except Exception:
-                pass
-
-        # Static media assets cache (JS, images, fonts)
-        if any(t in content_type for t in ("image/", "font/", "javascript", "application/json")):
-            asset_cache.set(cache_key, result.content, content_type)
 
         return Response(
             content=result.content,
@@ -142,8 +131,12 @@ async def proxy_fetch_endpoint(
         )
 
     except ValueError as val_err:
+        if raw_target_url.endswith(".js") or "javascript" in raw_target_url:
+            return Response(content=b"/* Script bypassed by security policy */", media_type="application/javascript")
         return render_cyberpunk_error_page(403, "SECURITY DIRECTIVE VIOLATION", str(val_err), raw_target_url)
     except Exception as exc:
+        if raw_target_url.endswith(".js") or "javascript" in raw_target_url:
+            return Response(content=b"/* Script load exception */", media_type="application/javascript")
         return render_cyberpunk_error_page(502, "UPSTREAM PROXY EXCEPTION", str(exc), raw_target_url)
 
 

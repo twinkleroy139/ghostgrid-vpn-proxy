@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 from urllib.parse import urljoin, urlparse
 
-import httpx
+from curl_cffi.requests import AsyncSession
 
 from app.config.settings import get_settings
 from app.proxy.cookie_manager import cookie_jar
@@ -39,47 +39,40 @@ class ProxyFetcher:
         node_info = self.settings.available_nodes.get(node, self.settings.available_nodes["direct"])
         proxy_mount = node_info.get("url")
 
-        async with httpx.AsyncClient(
-            proxy=proxy_mount,
-            follow_redirects=False,
-            timeout=httpx.Timeout(self.settings.REQUEST_TIMEOUT_SECONDS, connect=10.0),
-            verify=True,
-            http2=True,
-        ) as client:
+        async with AsyncSession(impersonate="chrome124") as session:
             while True:
                 parsed = urlparse(current_url)
                 target_host = parsed.netloc
-                clean_headers = sanitize_request_headers(incoming_headers, target_host)
+                clean_headers = sanitize_request_headers(incoming_headers, target_host, method=method)
 
                 stored_cookie = cookie_jar.get_cookie_header(user_id, current_url)
                 if stored_cookie:
                     clean_headers["Cookie"] = stored_cookie
 
-                response = await client.request(
+                response = await session.request(
                     method=method,
                     url=current_url,
                     headers=clean_headers,
-                    content=content if method in ("POST", "PUT", "PATCH") else None,
+                    data=content if method in ("POST", "PUT", "PATCH") else None,
+                    proxy=proxy_mount,
+                    timeout=self.settings.REQUEST_TIMEOUT_SECONDS,
+                    allow_redirects=False,
+                    verify=True,
                 )
 
                 raw_resp_headers = dict(response.headers)
                 cookie_jar.save_response_cookies(user_id, current_url, raw_resp_headers)
 
                 raw_bytes = response.content
-                if len(raw_bytes) > self.settings.MAX_RESPONSE_SIZE_BYTES:
-                    raise ValueError(
-                        f"Target response size ({len(raw_bytes)} bytes) exceeds limit of "
-                        f"{self.settings.MAX_RESPONSE_SIZE_BYTES} bytes."
-                    )
 
-                if response.is_redirect and "location" in response.headers:
+                # Follow redirects with SSRF validation
+                if response.status_code in (301, 302, 303, 307, 308) and "location" in response.headers:
                     redirect_count += 1
                     if redirect_count > self.settings.MAX_REDIRECTS:
                         raise ValueError(f"Exceeded maximum redirect limit ({self.settings.MAX_REDIRECTS})")
 
                     location = response.headers["location"]
                     next_url = urljoin(current_url, location)
-
                     current_url = sanitize_and_validate_target_url(next_url)
                     method = "GET"
                     content = None

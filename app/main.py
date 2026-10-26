@@ -11,6 +11,9 @@ from app.routes.auth_routes import router as auth_router
 from app.routes.proxy_routes import router as proxy_router
 from app.routes.user_routes import router as user_router
 
+from fastapi.responses import FileResponse
+
+
 settings = get_settings()
 
 app = FastAPI(
@@ -49,6 +52,16 @@ async def root():
     """Serves the main GhostGrid entrypoint landing page."""
     index_file = static_dir / "index.html"
     return FileResponse(index_file) if index_file.exists() else {"status": "Landing missing"}
+
+
+
+@app.get("/sw.js")
+async def serve_service_worker():
+    return FileResponse(
+        "static/sw.js",
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/"},
+    )
 
 
 @app.get("/browser")

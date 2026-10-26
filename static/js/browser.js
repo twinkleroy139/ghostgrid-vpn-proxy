@@ -14,6 +14,14 @@ function encodeTargetUrl(url) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker
+      .register("/sw.js", { scope: "/" })
+      .then((reg) => console.log("[GhostGrid] SW Registered with scope:", reg.scope))
+      .catch((err) => console.warn("[GhostGrid] SW Registration failed:", err));
+  }
+  
   const urlInput = document.getElementById("targetUrlInput");
   const launchBtn = document.getElementById("launchBtn");
   const reloadBtn = document.getElementById("reloadBtn");
