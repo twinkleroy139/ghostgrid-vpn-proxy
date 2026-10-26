@@ -6,8 +6,8 @@ from fastapi import HTTPException, Request, status
 # Sliding-window rate limit tracker: { key: [timestamp1, timestamp2, ...] }
 _rate_limit_records: Dict[str, List[float]] = defaultdict(list)
 
-# Limits: Max 60 requests per minute per client IP
-MAX_REQUESTS_PER_WINDOW = 60
+# Limits: Max 1200 requests per minute per client IP to support complex modern SPAs
+MAX_REQUESTS_PER_WINDOW = 1200
 WINDOW_SECONDS = 60.0
 
 

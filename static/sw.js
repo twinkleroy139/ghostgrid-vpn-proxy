@@ -1,6 +1,5 @@
 /**
  * GhostGrid Client-Side Service Worker Engine
- * Intercepts background asset calls, video chunk streams, and dynamic scripts.
  */
 
 self.addEventListener("install", (event) => {
@@ -27,12 +26,12 @@ self.addEventListener("fetch", (event) => {
     reqUrl.includes("/api/") ||
     reqUrl.includes("/proxy/") ||
     reqUrl.includes("/browser") ||
-    reqUrl.endsWith("/sw.js")
+    reqUrl.endsWith("/sw.js") ||
+    reqUrl.endsWith("/favicon.ico")
   ) {
     return;
   }
 
-  // Intercept any outgoing request and route it through the proxy
   const node = "direct";
   const proxiedEndpoint = `/proxy/fetch?url=${encodeUrl(reqUrl)}&node=${node}`;
 
@@ -42,7 +41,8 @@ self.addEventListener("fetch", (event) => {
       headers: event.request.headers,
       body: event.request.method !== "GET" && event.request.method !== "HEAD" ? event.request.body : undefined,
     }).catch(() => {
-      return new Response("", { status: 204 });
+      // Must pass null body when returning status 204
+      return new Response(null, { status: 204 });
     })
   );
 });

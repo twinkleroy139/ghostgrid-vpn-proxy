@@ -105,17 +105,58 @@ async def proxy_fetch_endpoint(
         if result.status_code == 200 and any(t in content_type for t in ("image/", "font/", "javascript", "text/css", "application/json")):
             asset_cache.set(cache_key, result.content, content_type)
 
+
         if "text/html" in content_type:
             history_service.add_entry(user_id, result.final_url)
-            # Inject <base> tag so relative paths resolve cleanly to upstream origin
             html_text = result.content.decode("utf-8", errors="replace")
+            
+            # History and presentation shim script to prevent origin cross-domain SecurityError
+            shim_script = """
+<script id="ghostgrid-runtime-shim">
+(function() {
+    // 1. Safe History wrapper (prevents SecurityError on SPA replaceState/pushState)
+    const origReplaceState = history.replaceState;
+    const origPushState = history.pushState;
+    
+    history.replaceState = function(state, unused, url) {
+        try {
+            return origReplaceState.apply(this, arguments);
+        } catch(e) {
+            // Suppress cross-origin replacement failure in proxied iframe
+            return null;
+        }
+    };
+    
+    history.pushState = function(state, unused, url) {
+        try {
+            return origPushState.apply(this, arguments);
+        } catch(e) {
+            return null;
+        }
+    };
+
+    // 2. Mock PresentationRequest if browser sandbox lacks flag
+    if (typeof window.PresentationRequest === "undefined") {
+        window.PresentationRequest = function() {
+            return {
+                start: () => Promise.reject(new Error("Presentation disabled")),
+                reconnect: () => Promise.reject(new Error("Presentation disabled")),
+                addEventListener: () => {}
+            };
+        };
+    }
+})();
+</script>
+"""
             base_tag = f'<base href="{result.final_url}">'
+            injection = f"{base_tag}\n{shim_script}"
+
             if "<head>" in html_text:
-                html_text = html_text.replace("<head>", f"<head>{base_tag}", 1)
+                html_text = html_text.replace("<head>", f"<head>{injection}", 1)
             elif "<HEAD>" in html_text:
-                html_text = html_text.replace("<HEAD>", f"<HEAD>{base_tag}", 1)
+                html_text = html_text.replace("<HEAD>", f"<HEAD>{injection}", 1)
             else:
-                html_text = base_tag + html_text
+                html_text = injection + html_text
 
             return HTMLResponse(
                 content=html_text,
@@ -123,6 +164,8 @@ async def proxy_fetch_endpoint(
                 headers=result.headers,
             )
 
+
+            
         return Response(
             content=result.content,
             status_code=result.status_code,
