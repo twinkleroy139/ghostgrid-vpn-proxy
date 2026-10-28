@@ -1,29 +1,30 @@
 """
 app/proxy/shim.py
- 
+
 Builds the <base> tag + runtime shim that is injected into proxied HTML.
- 
+
 The shim:
   * patches History.prototype so cross-origin replaceState/pushState never throws
   * wraps fetch() so mode:"same-origin" is downgraded to "cors" (SW then tunnels it)
   * intercepts link clicks, GET form submits and window.open, because
     navigations never reach the service worker
 """
- 
+
 import json
 import re
 from html import escape
- 
+
 _HEAD_RE = re.compile(r"<head(?=[\s>])[^>]*>", re.IGNORECASE)
 _HTML_RE = re.compile(r"<html(?=[\s>])[^>]*>", re.IGNORECASE)
- 
+
 _SHIM_TEMPLATE = r"""
 <script id="ghostgrid-runtime-shim">
 (function () {
   "use strict";
   var TARGET = __TARGET__;
   var NODE = __NODE__;
- 
+  console.log("[GhostGrid] shim active for", TARGET);
+
   function enc(u) {
     var bytes = new TextEncoder().encode(u), bin = "";
     for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
@@ -32,7 +33,7 @@ _SHIM_TEMPLATE = r"""
   function toProxy(abs) {
     return location.origin + "/proxy/fetch?url=" + enc(abs) + "&node=" + encodeURIComponent(NODE);
   }
- 
+
   // 1. History: resolve URLs against GhostGrid's origin, never the <base> origin
   function localize(u) {
     if (u === undefined || u === null || u === "") return u;
@@ -57,7 +58,7 @@ _SHIM_TEMPLATE = r"""
       };
     });
   }
- 
+
   // 2. fetch(): same-origin mode can never work cross-origin inside the proxy
   var origFetch = window.fetch;
   if (origFetch) {
@@ -69,7 +70,7 @@ _SHIM_TEMPLATE = r"""
       return origFetch.call(this, input, init);
     };
   }
- 
+
   // 3. Navigations never reach the service worker, so route them ourselves
   document.addEventListener("click", function (e) {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -88,7 +89,7 @@ _SHIM_TEMPLATE = r"""
     }
     location.assign(toProxy(href.href));
   }, false);
- 
+
   document.addEventListener("submit", function (e) {
     var f = e.target;
     if (e.defaultPrevented || !f || f.tagName !== "FORM") return;
@@ -102,7 +103,7 @@ _SHIM_TEMPLATE = r"""
     e.preventDefault();
     location.assign(toProxy(action.href));
   }, false);
- 
+
   var origOpen = window.open;
   window.open = function (u, t, f) {
     if (u) {
@@ -113,7 +114,7 @@ _SHIM_TEMPLATE = r"""
     }
     return origOpen.call(this, u, t, f);
   };
- 
+
   // 4. Presentation API stub (only if the sandbox still lacks it)
   if (typeof window.PresentationRequest === "undefined") {
     window.PresentationRequest = function () {
@@ -127,23 +128,23 @@ _SHIM_TEMPLATE = r"""
 })();
 </script>
 """
- 
- 
+
+
 def _js_string(value: str) -> str:
     # json.dumps gives a valid JS string literal; escape "<" so "</script>" can't break out
     return json.dumps(value).replace("<", "\\u003c")
- 
- 
+
+
 def build_shim(final_url: str, node: str) -> str:
     return _SHIM_TEMPLATE.replace("__TARGET__", _js_string(final_url)).replace(
         "__NODE__", _js_string(node)
     )
- 
- 
+
+
 def inject_into_html(html_text: str, final_url: str, node: str = "direct") -> str:
     """Insert <base> + shim as the very first things inside <head>."""
     injection = f'<base href="{escape(final_url, quote=True)}">\n{build_shim(final_url, node)}'
- 
+
     if _HEAD_RE.search(html_text):
         return _HEAD_RE.sub(lambda m: m.group(0) + injection, html_text, count=1)
     if _HTML_RE.search(html_text):
