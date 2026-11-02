@@ -2,12 +2,6 @@
 app/proxy/shim.py
 
 Builds the <base> tag + runtime shim that is injected into proxied HTML.
-
-The shim:
-  * patches History.prototype so cross-origin replaceState/pushState never throws
-  * wraps fetch() so mode:"same-origin" is downgraded to "cors" (SW then tunnels it)
-  * intercepts link clicks, GET form submits and window.open, because
-    navigations never reach the service worker
 """
 
 import json
@@ -34,13 +28,11 @@ _SHIM_TEMPLATE = r"""
     return location.origin + "/proxy/fetch?url=" + enc(abs) + "&node=" + encodeURIComponent(NODE);
   }
 
-  // 1. History: resolve URLs against GhostGrid's origin, never the <base> origin
   function localize(u) {
     if (u === undefined || u === null || u === "") return u;
     var abs;
     try { abs = new URL(String(u), TARGET); } catch (e) { return undefined; }
     if (abs.pathname === "/proxy/fetch") {
-      // page echoed our own location back to us
       return location.origin + abs.pathname + abs.search + abs.hash;
     }
     return toProxy(abs.href);
@@ -59,7 +51,6 @@ _SHIM_TEMPLATE = r"""
     });
   }
 
-  // 2. fetch(): same-origin mode can never work cross-origin inside the proxy
   var origFetch = window.fetch;
   if (origFetch) {
     window.fetch = function (input, init) {
@@ -71,7 +62,6 @@ _SHIM_TEMPLATE = r"""
     };
   }
 
-  // 3. Navigations never reach the service worker, so route them ourselves
   document.addEventListener("click", function (e) {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
@@ -93,15 +83,22 @@ _SHIM_TEMPLATE = r"""
   document.addEventListener("submit", function (e) {
     var f = e.target;
     if (e.defaultPrevented || !f || f.tagName !== "FORM") return;
-    if ((f.getAttribute("method") || "get").toLowerCase() !== "get") return; // POST forms: not handled yet
+    var method = (f.getAttribute("method") || "get").toLowerCase();
     var action;
     try { action = new URL(f.getAttribute("action") || TARGET, TARGET); } catch (err) { return; }
-    action.search = "";
-    new FormData(f).forEach(function (v, k) {
-      if (typeof v === "string") action.searchParams.append(k, v);
-    });
-    e.preventDefault();
-    location.assign(toProxy(action.href));
+    
+    if (method === "get") {
+      action.search = "";
+      new FormData(f).forEach(function (v, k) {
+        if (typeof v === "string") action.searchParams.append(k, v);
+      });
+      e.preventDefault();
+      location.assign(toProxy(action.href));
+    } else {
+      // POST/PUT forms: Rewrite the action attribute so the native browser submission 
+      // routes the payload directly through the proxy endpoint.
+      f.setAttribute("action", toProxy(action.href));
+    }
   }, false);
 
   var origOpen = window.open;
@@ -115,7 +112,6 @@ _SHIM_TEMPLATE = r"""
     return origOpen.call(this, u, t, f);
   };
 
-  // 4. Presentation API stub (only if the sandbox still lacks it)
   if (typeof window.PresentationRequest === "undefined") {
     window.PresentationRequest = function () {
       return {
@@ -129,20 +125,15 @@ _SHIM_TEMPLATE = r"""
 </script>
 """
 
-
 def _js_string(value: str) -> str:
-    # json.dumps gives a valid JS string literal; escape "<" so "</script>" can't break out
     return json.dumps(value).replace("<", "\\u003c")
-
 
 def build_shim(final_url: str, node: str) -> str:
     return _SHIM_TEMPLATE.replace("__TARGET__", _js_string(final_url)).replace(
         "__NODE__", _js_string(node)
     )
 
-
 def inject_into_html(html_text: str, final_url: str, node: str = "direct") -> str:
-    """Insert <base> + shim as the very first things inside <head>."""
     injection = f'<base href="{escape(final_url, quote=True)}">\n{build_shim(final_url, node)}'
 
     if _HEAD_RE.search(html_text):
