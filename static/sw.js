@@ -1,17 +1,8 @@
 /**
  * GhostGrid Client-Side Service Worker (v3)
- *
- * 1. Cross-origin requests from proxied pages are tunnelled through /proxy/fetch.
- * 2. Same-origin requests coming FROM a proxied page (e.g. YouTube building URLs
- *    from location.origin) are remapped onto the target site's origin, then tunnelled.
- * 3. GhostGrid's own pages/APIs behave normally.
- *
- * Navigations are never seen here (they are routed by destination scope);
- * the injected page shim handles link clicks / forms.
  */
 
 const PROXY_ENDPOINT = "/proxy/fetch";
-const NODE = "direct"; // TODO: SW cannot read localStorage; pass node via postMessage later
 
 // Same-origin paths that always belong to GhostGrid itself
 const LOCAL_PREFIXES = ["/proxy/", "/static/", "/sw.js", "/favicon.ico"];
@@ -51,7 +42,7 @@ self.addEventListener("fetch", (event) => {
 
   // Cross-origin: always tunnel
   if (url.origin !== self.location.origin) {
-    event.respondWith(tunnel(req, req.url));
+    event.respondWith(tunnel(event, req, req.url));
     return;
   }
 
@@ -62,34 +53,47 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(handleSameOrigin(event, req, url));
 });
 
-// Which site is the requesting page showing? Read it from the client's own URL.
-async function targetForClient(clientId) {
-  if (!clientId) return null;
+// Extract target URL and Node from the client's URL
+async function clientContext(clientId) {
+  if (!clientId) return { target: null, node: "direct" };
   try {
     const client = await self.clients.get(clientId);
-    if (!client) return null;
+    if (!client) return { target: null, node: "direct" };
     const cu = new URL(client.url);
-    if (cu.origin !== self.location.origin || cu.pathname !== PROXY_ENDPOINT) return null;
+    if (cu.origin !== self.location.origin || cu.pathname !== PROXY_ENDPOINT) return { target: null, node: "direct" };
+    
     const token = cu.searchParams.get("url");
+    const node = cu.searchParams.get("node") || "direct"; // Dynamically grab the node
     const decoded = token ? decodeToken(token) : null;
-    return decoded ? new URL(decoded) : null;
+    
+    return { 
+        target: decoded ? new URL(decoded) : null,
+        node: node 
+    };
   } catch (_) {
-    return null;
+    return { target: null, node: "direct" };
   }
 }
 
 async function handleSameOrigin(event, req, url) {
-  const target = await targetForClient(event.clientId);
-  if (!target) return fetch(req); // GhostGrid's own page calling its own API
-  const remapped = new URL(url.pathname + url.search, target.origin).href;
-  return tunnel(req, remapped);
+  const context = await clientContext(event.clientId);
+  if (!context.target) return fetch(req);
+  const remapped = new URL(url.pathname + url.search, context.target.origin).href;
+  return tunnel(event, req, remapped, context.node);
 }
 
-async function tunnel(req, targetUrl) {
-  const endpoint = `${PROXY_ENDPOINT}?url=${encodeUrl(targetUrl)}&node=${NODE}`;
+async function tunnel(event, req, targetUrl, overrideNode = null) {
+  // If no override node provided, look it up from the client context
+  let activeNode = overrideNode;
+  if (!activeNode) {
+      const context = await clientContext(event.clientId);
+      activeNode = context.node;
+  }
+
+  const endpoint = `${PROXY_ENDPOINT}?url=${encodeUrl(targetUrl)}&node=${activeNode}`;
   try {
     const hasBody = req.method !== "GET" && req.method !== "HEAD";
-    const body = hasBody ? await req.arrayBuffer() : undefined; // buffer: streams need duplex
+    const body = hasBody ? await req.arrayBuffer() : undefined; 
     return await fetch(endpoint, {
       method: req.method,
       headers: req.headers,
