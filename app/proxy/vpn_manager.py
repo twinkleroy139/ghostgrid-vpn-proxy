@@ -50,6 +50,7 @@ class VPNManager:
         return binary_path
 
     def _build_wireproxy_config(self, source_conf: Path) -> Path:
+        self.vpn_dir.mkdir(exist_ok=True)
         target_conf = self.vpn_dir / "wireproxy_active.conf"
         
         with open(source_conf, "r") as f:
@@ -67,17 +68,27 @@ class VPNManager:
         if self.process and self.process.poll() is None:
             return
             
-        source_conf = self.vpn_dir / config_filename
-        if not source_conf.exists():
-            logger.error(f"VPN config {source_conf} not found!")
+        possible_paths = [
+            self.vpn_dir / config_filename,           # Local dev
+            Path(f"/etc/secrets/{config_filename}"),  # Render secrets
+            self.base_dir / config_filename           # Render root fallback
+        ]
+        
+        source_conf = None
+        for path in possible_paths:
+            if path.exists():
+                source_conf = path
+                break
+                
+        if not source_conf:
+            logger.error(f"VPN config {config_filename} not found in any expected location!")
             return
 
         try:
             binary = self._get_wireproxy_binary()
             active_conf = self._build_wireproxy_config(source_conf)
             
-            logger.info("Starting Userspace WireGuard (wireproxy)...")
-            # Modified to output directly to the Render logs
+            logger.info(f"Starting Userspace WireGuard (wireproxy) using config from {source_conf}...")
             self.process = subprocess.Popen(
                 [str(binary), "-c", str(active_conf)],
                 stdout=sys.stdout,
