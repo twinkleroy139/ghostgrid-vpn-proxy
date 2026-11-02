@@ -21,7 +21,6 @@ class VPNManager:
         self.process = None
         self.proxy_url = "socks5://127.0.0.1:1080"
         
-        # Ensure cleanup on shutdown
         atexit.register(self.stop_vpn)
 
     def _get_wireproxy_binary(self) -> Path:
@@ -34,7 +33,6 @@ class VPNManager:
             return binary_path
 
         logger.info("Wireproxy binary not found. Downloading...")
-        # Use specific architecture versions
         url = "https://github.com/pufferffish/wireproxy/releases/download/v1.0.8/wireproxy_windows_amd64.tar.gz" if is_win \
             else "https://github.com/pufferffish/wireproxy/releases/download/v1.0.8/wireproxy_linux_amd64.tar.gz"
         
@@ -52,13 +50,11 @@ class VPNManager:
         return binary_path
 
     def _build_wireproxy_config(self, source_conf: Path) -> Path:
-        """Reads standard WG config and appends wireproxy SOCKS5 routing instructions."""
         target_conf = self.vpn_dir / "wireproxy_active.conf"
         
         with open(source_conf, "r") as f:
             content = f.read()
 
-        # Append the required SOCKS5 block for wireproxy
         if "[Socks5]" not in content:
             content += "\n\n[Socks5]\nBindAddress = 127.0.0.1:1080\n"
 
@@ -69,7 +65,7 @@ class VPNManager:
 
     def start_vpn(self, config_filename: str):
         if self.process and self.process.poll() is None:
-            return # Already running
+            return
             
         source_conf = self.vpn_dir / config_filename
         if not source_conf.exists():
@@ -81,10 +77,11 @@ class VPNManager:
             active_conf = self._build_wireproxy_config(source_conf)
             
             logger.info("Starting Userspace WireGuard (wireproxy)...")
+            # Modified to output directly to the Render logs
             self.process = subprocess.Popen(
                 [str(binary), "-c", str(active_conf)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stdout=sys.stdout,
+                stderr=sys.stderr
             )
         except Exception as e:
             logger.error(f"Failed to start VPN: {e}")
@@ -96,15 +93,10 @@ class VPNManager:
             self.process = None
 
     def get_active_node_proxy(self, node_key: str) -> Optional[str]:
-        """
-        Resolves the proxy mount URL for the requested node.
-        Dynamically starts the US VPN if requested.
-        """
         if node_key == "us":
             self.start_vpn("proton_us.conf")
             return self.proxy_url
             
-        # Fallback for other nodes based on settings
         nodes = self.settings.available_nodes
         if node_key in nodes:
             return nodes[node_key].get("url")
