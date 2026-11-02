@@ -26,15 +26,17 @@ class VPNManager:
     def _get_wireproxy_binary(self) -> Path:
         self.bin_dir.mkdir(exist_ok=True)
         is_win = sys.platform == "win32"
-        binary_name = "wireproxy.exe" if is_win else "wireproxy"
+        
+        # Use a version-specific name to force a fresh download of v1.0.7
+        binary_name = "wireproxy_1.0.7.exe" if is_win else "wireproxy_1.0.7"
         binary_path = self.bin_dir / binary_name
 
         if binary_path.exists():
             return binary_path
 
-        logger.info("Wireproxy binary not found. Downloading...")
-        url = "https://github.com/pufferffish/wireproxy/releases/download/v1.0.8/wireproxy_windows_amd64.tar.gz" if is_win \
-            else "https://github.com/pufferffish/wireproxy/releases/download/v1.0.8/wireproxy_linux_amd64.tar.gz"
+        logger.info("Wireproxy v1.0.7 not found. Downloading...")
+        url = "https://github.com/pufferffish/wireproxy/releases/download/v1.0.7/wireproxy_windows_amd64.tar.gz" if is_win \
+            else "https://github.com/pufferffish/wireproxy/releases/download/v1.0.7/wireproxy_linux_amd64.tar.gz"
         
         tar_path = self.bin_dir / "wireproxy.tar.gz"
         urllib.request.urlretrieve(url, tar_path)
@@ -43,6 +45,12 @@ class VPNManager:
             tar.extractall(path=self.bin_dir)
         
         tar_path.unlink()
+        
+        # Rename the extracted binary to our versioned name to prevent conflicts
+        extracted_name = "wireproxy.exe" if is_win else "wireproxy"
+        extracted_path = self.bin_dir / extracted_name
+        if extracted_path.exists():
+            extracted_path.rename(binary_path)
         
         if not is_win:
             binary_path.chmod(binary_path.stat().st_mode | stat.S_IEXEC)
@@ -88,11 +96,17 @@ class VPNManager:
             binary = self._get_wireproxy_binary()
             active_conf = self._build_wireproxy_config(source_conf)
             
-            logger.info(f"Starting Userspace WireGuard (wireproxy) using config from {source_conf}...")
+            # Inject environment variables to disable Landlock in WireGuard
+            env = os.environ.copy()
+            env["WG_DISABLE_LANDLOCK"] = "1"
+            env["DISABLE_LANDLOCK"] = "1"
+            
+            logger.info(f"Starting Userspace WireGuard (wireproxy v1.0.7) using config from {source_conf}...")
             self.process = subprocess.Popen(
                 [str(binary), "-c", str(active_conf)],
                 stdout=sys.stdout,
-                stderr=sys.stderr
+                stderr=sys.stderr,
+                env=env
             )
         except Exception as e:
             logger.error(f"Failed to start VPN: {e}")
