@@ -9,6 +9,8 @@ from app.proxy.cookie_manager import cookie_jar
 from app.proxy.header_cleaner import sanitize_request_headers, sanitize_response_headers
 from app.security.sanitizer import sanitize_and_validate_target_url
 
+from app.proxy.vpn_manager import vpn_manager
+
 
 @dataclass
 class ProxyFetchResult:
@@ -37,7 +39,7 @@ class ProxyFetcher:
         redirect_count = 0
 
         node_info = self.settings.available_nodes.get(node, self.settings.available_nodes["direct"])
-        proxy_mount = node_info.get("url")
+        proxy_mount = vpn_manager.get_active_node_proxy(node)
 
         async with AsyncSession(impersonate="chrome124") as session:
             while True:
