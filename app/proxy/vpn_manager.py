@@ -20,6 +20,7 @@ class VPNManager:
         self.vpn_dir = self.base_dir / "vpn_configs"
         self.process = None
         self.proxy_url = "socks5://127.0.0.1:1080"
+        self.current_config_file = None
         
         atexit.register(self.stop_vpn)
 
@@ -27,7 +28,6 @@ class VPNManager:
         self.bin_dir.mkdir(exist_ok=True)
         is_win = sys.platform == "win32"
         
-        # Use a version-specific name to force a fresh download of v1.0.7
         binary_name = "wireproxy_1.0.7.exe" if is_win else "wireproxy_1.0.7"
         binary_path = self.bin_dir / binary_name
 
@@ -46,7 +46,6 @@ class VPNManager:
         
         tar_path.unlink()
         
-        # Rename the extracted binary to our versioned name to prevent conflicts
         extracted_name = "wireproxy.exe" if is_win else "wireproxy"
         extracted_path = self.bin_dir / extracted_name
         if extracted_path.exists():
@@ -64,6 +63,10 @@ class VPNManager:
         with open(source_conf, "r") as f:
             content = f.read()
 
+        # Fix 1: Force PersistentKeepalive to prevent idle timeout crashes
+        if "PersistentKeepalive" not in content:
+            content = content.replace("[Peer]", "[Peer]\nPersistentKeepalive = 25")
+
         if "[Socks5]" not in content:
             content += "\n\n[Socks5]\nBindAddress = 127.0.0.1:1080\n"
 
@@ -73,13 +76,21 @@ class VPNManager:
         return target_conf
 
     def start_vpn(self, config_filename: str):
-        if self.process and self.process.poll() is None:
-            return
+        self.current_config_file = config_filename
+        
+        # Fix 2: Auto-restart mechanism if process died unexpectedly
+        if self.process:
+            poll_result = self.process.poll()
+            if poll_result is None:
+                return # Still running happily
+            else:
+                logger.warning(f"VPN process died unexpectedly with code {poll_result}. Restarting...")
+                self.process = None
             
         possible_paths = [
-            self.vpn_dir / config_filename,           # Local dev
-            Path(f"/etc/secrets/{config_filename}"),  # Render secrets
-            self.base_dir / config_filename           # Render root fallback
+            self.vpn_dir / config_filename,
+            Path(f"/etc/secrets/{config_filename}"),
+            self.base_dir / config_filename
         ]
         
         source_conf = None
@@ -96,12 +107,11 @@ class VPNManager:
             binary = self._get_wireproxy_binary()
             active_conf = self._build_wireproxy_config(source_conf)
             
-            # Inject environment variables to disable Landlock in WireGuard
             env = os.environ.copy()
             env["WG_DISABLE_LANDLOCK"] = "1"
             env["DISABLE_LANDLOCK"] = "1"
             
-            logger.info(f"Starting Userspace WireGuard (wireproxy v1.0.7) using config from {source_conf}...")
+            logger.info(f"Starting Userspace WireGuard using config from {source_conf}...")
             self.process = subprocess.Popen(
                 [str(binary), "-c", str(active_conf)],
                 stdout=sys.stdout,
