@@ -23,6 +23,11 @@ BLOCKED_REQUEST_HEADERS: Set[str] = {
     "cf-visitor",
     "accept-encoding",
     "content-length",
+    # Block fetch metadata that leaks the proxy's cross-origin state to Cloudflare
+    "sec-fetch-dest",
+    "sec-fetch-mode",
+    "sec-fetch-site",
+    "sec-fetch-user",
 }
 
 BLOCKED_RESPONSE_HEADERS: Set[str] = {
@@ -48,12 +53,13 @@ def sanitize_request_headers(
         sanitized[key] = value
 
     sanitized["Host"] = target_host
-
-    # Only attach Origin/Referer on state-modifying requests, never on static GETs
     target_origin = f"https://{target_host}"
-    if method.upper() in ("POST", "PUT", "PATCH", "DELETE"):
+
+    # ALWAYS forge the Referer to bypass API whitelists and anti-CSRF blocks
+    sanitized["Referer"] = f"{target_origin}/"
+
+    if method.upper() in ("POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
         sanitized["Origin"] = target_origin
-        sanitized["Referer"] = f"{target_origin}/"
 
     sanitized["User-Agent"] = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
