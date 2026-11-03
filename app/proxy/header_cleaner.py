@@ -23,7 +23,6 @@ BLOCKED_REQUEST_HEADERS: Set[str] = {
     "cf-visitor",
     "accept-encoding",
     "content-length",
-    # Block fetch metadata that leaks the proxy's cross-origin state to Cloudflare
     "sec-fetch-dest",
     "sec-fetch-mode",
     "sec-fetch-site",
@@ -33,13 +32,12 @@ BLOCKED_REQUEST_HEADERS: Set[str] = {
 BLOCKED_RESPONSE_HEADERS: Set[str] = {
     "content-security-policy",
     "content-security-policy-report-only",
-    "x-frame-options",
+    "x-frame-options",  # Critical: Prevents iframe blocking
     "strict-transport-security",
     "clear-site-data",
     "content-encoding",
     "content-length",
 }
-
 
 def sanitize_request_headers(
     headers: Dict[str, str], target_host: str, method: str = "GET"
@@ -55,7 +53,6 @@ def sanitize_request_headers(
     sanitized["Host"] = target_host
     target_origin = f"https://{target_host}"
 
-    # ALWAYS forge the Referer to bypass API whitelists and anti-CSRF blocks
     sanitized["Referer"] = f"{target_origin}/"
 
     if method.upper() in ("POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
@@ -69,7 +66,6 @@ def sanitize_request_headers(
     sanitized["Accept-Language"] = "en-US,en;q=0.9"
 
     return sanitized
-
 
 def sanitize_response_headers(headers: Dict[str, str]) -> Dict[str, str]:
     sanitized: Dict[str, str] = {}
