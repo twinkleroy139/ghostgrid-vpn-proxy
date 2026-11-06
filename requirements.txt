@@ -8,3 +8,4 @@ pydantic-settings>=2.5.0
 python-dotenv>=1.0.1
 websockets>=13.0
 brotli>=1.1.0
+beautifulsoup4>=4.12.3,<5
