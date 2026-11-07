@@ -55,6 +55,14 @@
       <button id="reloadBtn" class="cyber-btn cyber-btn-magenta">RELOAD</button>
     </div>
 
+    <!-- WAF escape banner — shown when the proxied page is blocked by bot detection -->
+    <div id="wafBanner" style="display: none; padding: 0.75rem 1rem; margin: 0.5rem 1rem; background: rgba(255, 170, 0, 0.15); border: 1px solid var(--neon-amber, #ffaa00); border-radius: 4px; font-size: 0.85rem; color: var(--neon-amber, #ffaa00); display: none; align-items: center; justify-content: space-between; gap: 1rem;">
+      <span id="wafBannerText">This site is protected by WAF bot detection and cannot be proxied.</span>
+      <a id="wafEscapeLink" href="#" target="_blank" rel="noopener noreferrer" class="cyber-btn" style="padding: 0.3rem 0.75rem; font-size: 0.75rem; text-decoration: none; white-space: nowrap;">
+        OPEN REAL SITE ↗
+      </a>
+    </div>
+
     <div id="frameLoader" style="display: none; padding: 0.5rem; color: var(--neon-cyan); font-size: 0.85rem;">
       &gt; RETRIEVING AND REWRITING UPSTREAM STREAM...
     </div>

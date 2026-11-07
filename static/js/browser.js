@@ -1,7 +1,8 @@
 /**
  * GhostGrid Browser Workspace Controller
  * Handles URL encoding, VPN node routing, iframe lifecycle,
- * and the CONNECT/DISCONNECT button + live VPN status.
+ * the CONNECT/DISCONNECT button + live VPN status,
+ * and WAF-blocked page detection with an escape hatch.
  */
 
 function encodeTargetUrl(url) {
@@ -44,15 +45,19 @@ document.addEventListener("DOMContentLoaded", () => {
   const vpnEgressIp = document.getElementById("vpnEgressIp");
   const connectBtn = document.getElementById("connectBtn");
 
+  const wafBanner = document.getElementById("wafBanner");
+  const wafBannerText = document.getElementById("wafBannerText");
+  const wafEscapeLink = document.getElementById("wafEscapeLink");
+
   // ---------------------------------------------------------- UI STATE
-  const NODE_LABELS = { us: "US", de: "DE", sg: "SG", uk: "UK", direct: "DIRECT" };
-  const NODE_IPS = {}; // populated per connect
+  const NODE_IPS = {};
   let lastStatus = { connected: false, node: "direct", degraded: false, uptime_seconds: 0 };
   let pollHandle = null;
   let tickHandle = null;
   let connectedAtMs = 0;
   let lastNode = "direct";
   let connectInProgress = false;
+  let currentTargetUrl = "";
 
   function setStatusDot(color, glow) {
     vpnStatusDot.style.background = color;
@@ -66,7 +71,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const isConnected = !!status.connected;
     const isDegraded = !!status.degraded;
 
-    // Status text
     if (isConnected) {
       const uptime = status.uptime_seconds || 0;
       vpnStatusText.textContent = `CONNECTED ${formatUptime(uptime)}`;
@@ -82,9 +86,7 @@ document.addEventListener("DOMContentLoaded", () => {
       setStatusDot("var(--text-muted)");
     }
 
-    // CONNECT button visibility + label
     if (isDirect && !connectInProgress) {
-      // No tunnel to manage
       connectBtn.style.display = "none";
     } else if (isConnected) {
       connectBtn.style.display = "inline-block";
@@ -103,7 +105,6 @@ document.addEventListener("DOMContentLoaded", () => {
       connectBtn.classList.remove("cyber-btn-magenta");
     }
 
-    // Egress IP
     if (NODE_IPS[node]) {
       vpnEgressIp.textContent = NODE_IPS[node];
       vpnEgressIp.style.opacity = "0.9";
@@ -126,6 +127,22 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 1000);
   }
 
+  // ---------------------------------------------------------- WAF BANNER
+  function showWafBanner(realUrl) {
+    if (!realUrl) {
+      wafBanner.style.display = "none";
+      return;
+    }
+    wafBannerText.textContent = `This site is protected by WAF bot detection and cannot be proxied. Open it directly in a new tab instead.`;
+    wafEscapeLink.href = realUrl;
+    wafBanner.style.display = "flex";
+  }
+
+  function hideWafBanner() {
+    wafBanner.style.display = "none";
+    wafEscapeLink.href = "#";
+  }
+
   // ---------------------------------------------------------- STATUS POLLING
   async function pollStatus() {
     try {
@@ -133,20 +150,16 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!res.ok) return;
       const status = await res.json();
 
-      // Sync our local uptime reference
       if (status.connected && status.uptime_seconds > 0) {
         connectedAtMs = Date.now() - status.uptime_seconds * 1000;
       }
 
-      // If we just connected, fetch the egress IP once
       if (status.connected && !NODE_IPS[status.node]) {
         fetchEgressIp(status.node);
       }
 
       applyUiState(status);
-    } catch (e) {
-      // ignore transient errors
-    }
+    } catch (e) {}
   }
 
   function schedulePoll() {
@@ -165,7 +178,6 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch(`/proxy/fetch?url=${token}&node=${encodeURIComponent(node)}`);
       if (!res.ok) return;
       const text = (await res.text()).trim();
-      // Basic sanity: looks like an IP
       if (/^\d{1,3}(\.\d{1,3}){3}$/.test(text)) {
         NODE_IPS[node] = text;
         if (lastStatus.node === node) {
@@ -173,9 +185,7 @@ document.addEventListener("DOMContentLoaded", () => {
           vpnEgressIp.style.opacity = "0.9";
         }
       }
-    } catch (e) {
-      // silent — IP display is cosmetic
-    }
+    } catch (e) {}
   }
 
   // ---------------------------------------------------------- CONNECT / DISCONNECT
@@ -214,7 +224,6 @@ document.addEventListener("DOMContentLoaded", () => {
         const status = await res.json();
         connectedAtMs = 0;
         applyUiState(status);
-        // Clear cached egress IP for the old node
         Object.keys(NODE_IPS).forEach((k) => delete NODE_IPS[k]);
         vpnEgressIp.textContent = "—";
       }
@@ -264,7 +273,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   vpnNodeSelect.addEventListener("change", async () => {
     const newValue = vpnNodeSelect.value;
-    // If a VPN is currently active and user changes to a different node, disconnect first
     if (lastStatus.connected && lastStatus.node !== newValue) {
       await disconnectVpn();
     }
@@ -274,15 +282,24 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // ---------------------------------------------------------- NAVIGATION
+  function normalizeUrl(url) {
+    if (!url) return "";
+    const u = url.trim();
+    return /^https?:\/\//i.test(u) ? u : `https://${u}`;
+  }
+
   function navigateTo(url) {
     if (!url) return;
-    const token = encodeTargetUrl(url);
+    const target = normalizeUrl(url);
+    const token = encodeTargetUrl(target);
     if (!token) return;
 
     const selectedNode = vpnNodeSelect ? vpnNodeSelect.value : "direct";
 
+    currentTargetUrl = target;
     if (frameLoader) frameLoader.style.display = "block";
-    if (activeUrlDisplay) activeUrlDisplay.textContent = `${url} [${selectedNode.toUpperCase()}]`;
+    if (activeUrlDisplay) activeUrlDisplay.textContent = `${target} [${selectedNode.toUpperCase()}]`;
+    hideWafBanner();
 
     proxyFrame.src = `/proxy/fetch?url=${token}&node=${encodeURIComponent(selectedNode)}`;
   }
@@ -301,6 +318,7 @@ document.addEventListener("DOMContentLoaded", () => {
     reloadBtn.addEventListener("click", () => {
       if (proxyFrame.src && proxyFrame.src !== "about:blank") {
         if (frameLoader) frameLoader.style.display = "block";
+        hideWafBanner();
         proxyFrame.src = proxyFrame.src;
       }
     });
@@ -309,6 +327,25 @@ document.addEventListener("DOMContentLoaded", () => {
   if (proxyFrame) {
     proxyFrame.addEventListener("load", () => {
       if (frameLoader) frameLoader.style.display = "none";
+
+      // Detect WAF SHIELD error page inside the iframe and offer escape hatch.
+      // Same-origin (both are ghostgrid-proxy.onrender.com), so we can read the body.
+      try {
+        const doc = proxyFrame.contentDocument || proxyFrame.contentWindow.document;
+        if (!doc) return;
+        const bodyText = doc.body ? doc.body.innerText || "" : "";
+        const titleText = doc.title || "";
+        const isWafPage =
+          bodyText.includes("WAF SHIELD") ||
+          titleText.includes("Terminal Fault");
+        if (isWafPage && currentTargetUrl) {
+          showWafBanner(currentTargetUrl);
+        } else {
+          hideWafBanner();
+        }
+      } catch (e) {
+        // Cross-origin or sandboxed — ignore
+      }
     });
   }
 
