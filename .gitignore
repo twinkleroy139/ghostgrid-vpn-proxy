@@ -6,3 +6,5 @@ vpn_configs/
 __pycache__/
 *.pyc
 .venv/
+# Dev-only test scripts
+scripts/
