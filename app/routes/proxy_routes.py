@@ -43,30 +43,68 @@ def _quiet_js_bypass(url: str, payload: bytes = b"/* GhostGrid bypassed */") -> 
 
 @router.get("/nodes")
 async def list_vpn_nodes():
-    import os
     from pathlib import Path
-    from app.proxy.vpn_manager import vpn_manager
-    
     nodes = []
     for k, v in settings.available_nodes.items():
-        # A node is configured if it has an env var URL, OR it's the WireGuard node with a valid config file
         is_configured = v["url"] is not None or k == "direct"
-        
         if k == "us":
-            # Check if proton_us.conf exists in any of the expected locations
             conf_paths = [
                 vpn_manager.vpn_dir / "proton_us.conf",
                 Path("/etc/secrets/proton_us.conf"),
-                vpn_manager.base_dir / "proton_us.conf"
+                vpn_manager.base_dir / "proton_us.conf",
             ]
             if any(p.exists() for p in conf_paths):
                 is_configured = True
-
         nodes.append({"id": k, "name": v["name"], "configured": is_configured})
-        
     return JSONResponse(content={"nodes": nodes})
 
 
+# ---------------------------------------------------------------- VPN LIFECYCLE
+@router.post("/connect")
+async def connect_node(
+    node: str = Query(..., description="Node ID to connect"),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Explicitly start the VPN for the requested node.
+    Runs synchronously (blocks up to ~20s while Wireproxy binds), so the
+    frontend shows CONNECTING and updates after this returns.
+    """
+    user_id = current_user.get("uid", "guest_operative")
+    logger.info("connect_node user=%s node=%s", user_id, node)
+
+    if node == "direct":
+        # Direct node needs no tunnel.
+        return JSONResponse({"connected": False, "node": "direct", "error": None})
+
+    ok = vpn_manager.connect_node(node)
+    if not ok:
+        return JSONResponse(
+            {"connected": False, "node": node,
+             "error": f"Failed to bring up VPN tunnel for node '{node}'."},
+            status_code=503,
+        )
+
+    status = vpn_manager.get_status()
+    return JSONResponse(status)
+
+
+@router.post("/disconnect")
+async def disconnect_node(current_user: dict = Depends(get_current_user)):
+    """Explicitly stop the active VPN tunnel."""
+    user_id = current_user.get("uid", "guest_operative")
+    logger.info("disconnect_node user=%s", user_id)
+    vpn_manager.disconnect()
+    return JSONResponse({"connected": False, "node": "direct", "uptime_seconds": 0})
+
+
+@router.get("/status")
+async def vpn_status():
+    """Return current VPN status — safe to poll every 1–2 seconds."""
+    return JSONResponse(vpn_manager.get_status())
+
+
+# ---------------------------------------------------------------- FETCH
 @router.api_route("/fetch", methods=["GET", "POST"])
 async def proxy_fetch_endpoint(
     request: Request,
@@ -160,8 +198,6 @@ async def proxy_fetch_endpoint(
         usage_service.record_usage(user_id, payload_size)
         log_proxy_access(user_id, result.final_url, result.status_code, payload_size)
 
-        # Cache safe asset types only. NOTE: text/css deliberately excluded —
-        # CSS must be rewritten on every request, so we do not cache the raw body.
         if result.status_code == 200 and any(
             t in content_type for t in
             ("image/", "font/", "javascript", "application/json")

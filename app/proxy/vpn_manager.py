@@ -9,7 +9,7 @@ import tarfile
 import time
 import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 
 from app.config.settings import get_settings
 from app.proxy.vpn_health import probe_socks5, wait_for_port
@@ -40,6 +40,8 @@ class VPNManager:
         self.proxy_url: str = f"socks5://{SOCKS_HOST}:{SOCKS_PORT}"
         self.current_config_file: Optional[str] = None
         self._degraded: bool = False
+        self.connected_at: Optional[float] = None
+        self.active_node: Optional[str] = None
         atexit.register(self.stop_vpn)
 
     # ------------------------------------------------------------------ binary
@@ -104,6 +106,11 @@ class VPNManager:
 
     # ------------------------------------------------------------------ start
     def start_vpn(self, config_filename: str) -> bool:
+        # If a different VPN is running, stop it first
+        if self.process is not None and self.current_config_file != config_filename:
+            logger.info("Switching VPN node: stopping %s before starting %s", self.current_config_file, config_filename)
+            self.stop_vpn()
+
         self.current_config_file = config_filename
 
         # Already alive?
@@ -174,12 +181,16 @@ class VPNManager:
         else:
             logger.warning("VPN port open but end-to-end probe failed. "
                            "Handshake may still be completing, or peer is unreachable.")
+            
+        self.connected_at = time.time()
         return True
 
     # ------------------------------------------------------------------ stop
     def stop_vpn(self):
         self._degraded = False
         self.socks_port = SOCKS_PORT
+        self.connected_at = None
+        self.active_node = None
         if self.process is None:
             return
         logger.info("Shutting down VPN proxy (pid=%s)...", self.process.pid)
@@ -199,6 +210,7 @@ class VPNManager:
     def get_active_node_proxy(self, node_key: str) -> Optional[str]:
         if node_key == "us":
             if self.start_vpn("proton_us.conf"):
+                self.active_node = "us"
                 return self.proxy_url
             logger.error("US node requested but VPN failed to become ready; returning None.")
             return None
@@ -207,6 +219,35 @@ class VPNManager:
         if node_key in nodes:
             return nodes[node_key].get("url")
         return None
+        
+    def connect_node(self, node_key: str) -> bool:
+        """Explicitly start the VPN for the requested node."""
+        if node_key == "us":
+            ok = self.start_vpn("proton_us.conf")
+            if ok:
+                self.active_node = "us"
+            return ok
+        # For nodes managed by env var (direct/de/sg/uk if ever configured via HTTP proxy)
+        # we don't need a background process.
+        return True
+        
+    def disconnect(self):
+        """Explicitly stop the VPN."""
+        self.stop_vpn()
+
+    def get_status(self) -> Dict:
+        """Return the current VPN status for the frontend UI."""
+        is_running = self.process is not None and self.process.poll() is None
+        elapsed = 0
+        if is_running and self.connected_at:
+            elapsed = int(time.time() - self.connected_at)
+            
+        return {
+            "connected": is_running,
+            "node": self.active_node if is_running else "direct",
+            "degraded": self._degraded,
+            "uptime_seconds": elapsed
+        }
 
 
 vpn_manager = VPNManager()
