@@ -7,6 +7,10 @@ Rewrites static HTML navigation / subresource URLs to route through GhostGrid's
 /proxy/fetch endpoint. Emits ABSOLUTE proxy URLs (scheme://host/proxy/fetch?...)
 so they survive the injected <base href="<upstream>"> tag — a relative URL would
 otherwise resolve against the upstream origin and double-wrap through the SW.
+
+Also strips <meta http-equiv="X-Frame-Options"> and inline CSP meta tags, which
+some sites (e.g. usphonebook.com search results) use to block iframe embedding.
+Stripping the HTTP response header in header_cleaner.py is not enough for these.
 """
 
 import logging
@@ -48,6 +52,16 @@ ATTRIBUTE_MAP = [
     ("input", "formaction"),
     ("button", "formaction"),
 ]
+
+# <meta http-equiv="..."> values we strip from the HTML body.
+# These duplicate HTTP response headers that header_cleaner.py already strips,
+# but the browser honors the meta form independently — so we must remove both.
+META_HTTP_EQUIV_STRIP = {
+    "x-frame-options",
+    "content-security-policy",
+    "content-security-policy-report-only",
+    "x-content-security-policy",
+}
 
 
 # ---------------------------------------------------------------- helpers
@@ -144,6 +158,26 @@ def _rewrite_srcset(element, base_url: str, node: str, proxy_origin: str) -> boo
     return changed
 
 
+def _strip_blocking_meta_tags(soup) -> int:
+    """
+    Remove <meta http-equiv="..."> tags that block iframe embedding or inline scripts.
+    Returns the number of tags stripped (for logging).
+    """
+    stripped = 0
+    for meta in soup.find_all("meta"):
+        http_equiv = meta.get("http-equiv")
+        if not http_equiv:
+            continue
+        if isinstance(http_equiv, list):
+            values = [str(v).lower() for v in http_equiv]
+        else:
+            values = [str(http_equiv).lower()]
+        if any(v in META_HTTP_EQUIV_STRIP for v in values):
+            meta.decompose()
+            stripped += 1
+    return stripped
+
+
 # ---------------------------------------------------------------- public API
 
 def rewrite_html_links(
@@ -172,6 +206,12 @@ def rewrite_html_links(
     try:
         soup = BeautifulSoup(html_text, "html.parser")
 
+        # 1. Strip <meta http-equiv> blockers FIRST (before rewriting anything else)
+        stripped = _strip_blocking_meta_tags(soup)
+        if stripped:
+            logger.info("Stripped %d meta http-equiv blocker(s) from %s", stripped, base_url)
+
+        # 2. Rewrite all navigation / subresource attributes
         for tag_name, attribute in ATTRIBUTE_MAP:
             for element in soup.find_all(tag_name):
                 if tag_name == "link" and attribute == "href":
