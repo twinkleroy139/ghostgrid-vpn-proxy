@@ -1,23 +1,31 @@
 /**
- * GhostGrid Client-Side Service Worker (v3)
+ * GhostGrid Client-Side Service Worker (v4)
+ *
+ * Responsibilities:
+ *   - Tunnel cross-origin subresource fetches through /proxy/fetch so they
+ *     inherit the selected VPN node.
+ *   - Remap same-origin requests that came from a proxied page (e.g. a CSS
+ *     file requesting /static/fonts/a.ttf) to the real upstream via the proxy.
+ *   - Never intercept top-level navigations (browsers don't allow it anyway).
+ *   - Never intercept GhostGrid's own routes (/proxy/*, /sw.js).
+ *   - Idempotent: never wrap a URL that is already /proxy/fetch?url=...
  */
 
 const PROXY_ENDPOINT = "/proxy/fetch";
-
-// Same-origin paths that always belong to GhostGrid itself
-const LOCAL_PREFIXES = ["/proxy/", "/static/", "/sw.js", "/favicon.ico"];
+const SELF_PREFIXES = ["/proxy/", "/sw.js", "/favicon.ico"];
+const MAX_SW_BODY_BYTES = 10 * 1024 * 1024;
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
-function encodeUrl(url) {
-  const utf8 = new TextEncoder().encode(url);
-  let binary = "";
-  utf8.forEach((b) => (binary += String.fromCharCode(b)));
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+function b64urlEncode(str) {
+  const utf8 = new TextEncoder().encode(str);
+  let bin = "";
+  utf8.forEach((b) => (bin += String.fromCharCode(b)));
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function decodeToken(token) {
+function b64urlDecode(token) {
   try {
     let b64 = token.replace(/-/g, "+").replace(/_/g, "/");
     while (b64.length % 4) b64 += "=";
@@ -29,71 +37,48 @@ function decodeToken(token) {
   }
 }
 
-self.addEventListener("fetch", (event) => {
-  const req = event.request;
-
-  let url;
+function parseProxyUrl(urlObj) {
   try {
-    url = new URL(req.url);
+    if (urlObj.pathname !== PROXY_ENDPOINT) return null;
+    const token = urlObj.searchParams.get("url");
+    if (!token) return null;
+    const decoded = b64urlDecode(token);
+    if (!decoded) return null;
+    const node = urlObj.searchParams.get("node") || "direct";
+    return { target: new URL(decoded), node };
   } catch (_) {
-    return;
+    return null;
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return;
+}
 
-  // Cross-origin: always tunnel
-  if (url.origin !== self.location.origin) {
-    event.respondWith(tunnel(event, req, req.url));
-    return;
-  }
-
-  // Same-origin
-  if (req.mode === "navigate") return;
-  if (LOCAL_PREFIXES.some((p) => url.pathname.startsWith(p))) return;
-
-  event.respondWith(handleSameOrigin(event, req, url));
-});
-
-// Extract target URL and Node from the client's URL
 async function clientContext(clientId) {
   if (!clientId) return { target: null, node: "direct" };
   try {
     const client = await self.clients.get(clientId);
     if (!client) return { target: null, node: "direct" };
     const cu = new URL(client.url);
-    if (cu.origin !== self.location.origin || cu.pathname !== PROXY_ENDPOINT) return { target: null, node: "direct" };
-    
-    const token = cu.searchParams.get("url");
-    const node = cu.searchParams.get("node") || "direct"; // Dynamically grab the node
-    const decoded = token ? decodeToken(token) : null;
-    
-    return { 
-        target: decoded ? new URL(decoded) : null,
-        node: node 
-    };
+    const parsed = parseProxyUrl(cu);
+    if (parsed) return parsed;
+    return { target: null, node: "direct" };
   } catch (_) {
     return { target: null, node: "direct" };
   }
 }
 
-async function handleSameOrigin(event, req, url) {
-  const context = await clientContext(event.clientId);
-  if (!context.target) return fetch(req);
-  const remapped = new URL(url.pathname + url.search, context.target.origin).href;
-  return tunnel(event, req, remapped, context.node);
-}
+async function tunnel(req, targetUrl, node) {
+  const endpoint = `${PROXY_ENDPOINT}?url=${b64urlEncode(targetUrl)}&node=${encodeURIComponent(node)}`;
 
-async function tunnel(event, req, targetUrl, overrideNode = null) {
-  // If no override node provided, look it up from the client context
-  let activeNode = overrideNode;
-  if (!activeNode) {
-      const context = await clientContext(event.clientId);
-      activeNode = context.node;
-  }
-
-  const endpoint = `${PROXY_ENDPOINT}?url=${encodeUrl(targetUrl)}&node=${activeNode}`;
   try {
     const hasBody = req.method !== "GET" && req.method !== "HEAD";
-    const body = hasBody ? await req.arrayBuffer() : undefined; 
+    let body;
+    if (hasBody) {
+      const cl = parseInt(req.headers.get("content-length") || "0", 10);
+      if (cl > MAX_SW_BODY_BYTES) {
+        console.warn("[GhostGrid SW] body too large to buffer, bypassing:", targetUrl, cl);
+        return fetch(req);
+      }
+      body = await req.arrayBuffer();
+    }
     return await fetch(endpoint, {
       method: req.method,
       headers: req.headers,
@@ -108,3 +93,51 @@ async function tunnel(event, req, targetUrl, overrideNode = null) {
     });
   }
 }
+
+self.addEventListener("fetch", (event) => {
+  const req = event.request;
+
+  let url;
+  try {
+    url = new URL(req.url);
+  } catch (_) {
+    return;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return;
+
+  if (url.origin === self.location.origin && SELF_PREFIXES.some((p) => url.pathname.startsWith(p))) {
+    return;
+  }
+
+  const alreadyProxied = parseProxyUrl(url);
+  if (alreadyProxied && url.origin === self.location.origin) {
+    return;
+  }
+
+  if (alreadyProxied) {
+    event.respondWith(tunnel(req, alreadyProxied.target.href, alreadyProxied.node));
+    return;
+  }
+
+  if (url.origin !== self.location.origin) {
+    event.respondWith((async () => {
+      const ctx = await clientContext(event.clientId);
+      return tunnel(req, req.url, ctx.node || "direct");
+    })());
+    return;
+  }
+
+  if (req.mode === "navigate") return;
+
+  event.respondWith((async () => {
+    const ctx = await clientContext(event.clientId);
+    if (!ctx.target) {
+      return new Response("GhostGrid: no client context for remap", {
+        status: 502,
+        headers: { "Content-Type": "text/plain" },
+      });
+    }
+    const remapped = new URL(url.pathname + url.search, ctx.target.origin).href;
+    return tunnel(req, remapped, ctx.node || "direct");
+  })());
+});
