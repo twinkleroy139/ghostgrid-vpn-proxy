@@ -80,4 +80,5 @@ def sanitize_response_headers(headers: Dict[str, str]) -> Dict[str, str]:
     sanitized["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     sanitized["Access-Control-Allow-Headers"] = "*"
     sanitized["X-Proxy-Engine"] = "GhostGrid-Cyberpunk-Core"
-    return sanitizedls
+
+    return sanitized
