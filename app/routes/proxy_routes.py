@@ -43,10 +43,27 @@ def _quiet_js_bypass(url: str, payload: bytes = b"/* GhostGrid bypassed */") -> 
 
 @router.get("/nodes")
 async def list_vpn_nodes():
-    nodes = [
-        {"id": k, "name": v["name"], "configured": v["url"] is not None or k == "direct"}
-        for k, v in settings.available_nodes.items()
-    ]
+    import os
+    from pathlib import Path
+    from app.proxy.vpn_manager import vpn_manager
+    
+    nodes = []
+    for k, v in settings.available_nodes.items():
+        # A node is configured if it has an env var URL, OR it's the WireGuard node with a valid config file
+        is_configured = v["url"] is not None or k == "direct"
+        
+        if k == "us":
+            # Check if proton_us.conf exists in any of the expected locations
+            conf_paths = [
+                vpn_manager.vpn_dir / "proton_us.conf",
+                Path("/etc/secrets/proton_us.conf"),
+                vpn_manager.base_dir / "proton_us.conf"
+            ]
+            if any(p.exists() for p in conf_paths):
+                is_configured = True
+
+        nodes.append({"id": k, "name": v["name"], "configured": is_configured})
+        
     return JSONResponse(content={"nodes": nodes})
 
 
