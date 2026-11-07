@@ -1,9 +1,10 @@
-# Python environment & cache
-venv/
-env/
-__pycache__/
-
-
-# Ignore VPN configurations and binaries
-vpn_configs/
+.env
+.env.local
+serviceAccountKey.json
 bin/
+vpn_configs/
+__pycache__/
+*.pyc
+.venv/
+# Dev-only test scripts
+scripts/
