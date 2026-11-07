@@ -22,7 +22,7 @@ from app.proxy.url_encoder import decode_url
 from app.proxy.vpn_manager import vpn_manager
 from app.proxy.ws_proxy import proxy_websocket
 from app.security.adblock import is_ad_or_tracker
-from app.services.history_service import history_service  # noqa: F401  (kept for parity)
+from app.services.history_service import history_service  # noqa: F401
 from app.services.logger import log_proxy_access
 from app.services.usage_service import usage_service
 
@@ -88,8 +88,6 @@ async def proxy_fetch_endpoint(
                 raw_target_url,
             )
 
-        # Route the streaming client through the SAME VPN manager the fetcher uses.
-        # curl_cffi supports the same proxy URL scheme; use a fresh AsyncSession.
         from curl_cffi.requests import AsyncSession
 
         try:
@@ -144,7 +142,6 @@ async def proxy_fetch_endpoint(
         usage_service.record_usage(user_id, payload_size)
         log_proxy_access(user_id, result.final_url, result.status_code, payload_size)
 
-        # Cache safe asset types only.
         if result.status_code == 200 and any(
             t in content_type for t in
             ("image/", "font/", "javascript", "text/css", "application/json")
@@ -154,11 +151,12 @@ async def proxy_fetch_endpoint(
         # ------------------------------------------------------- HTML RESPONSE
         if "text/html" in content_type:
             html_text = result.content.decode("utf-8", errors="replace")
-
-            # NEW: rewrite static navigation before injecting the runtime shim.
-            # The shim's idempotent guard leaves these /proxy/fetch URLs alone.
+            proxy_origin = str(request.base_url).rstrip("/")
+            
             try:
-                html_text = rewrite_html_links(html_text, result.final_url, node)
+                html_text = rewrite_html_links(
+                    html_text, result.final_url, node, proxy_origin=proxy_origin
+                )
             except Exception as exc:
                 logger.warning(
                     "rewriter fail url=%s cls=%s msg=%s (falling back to shim only)",
