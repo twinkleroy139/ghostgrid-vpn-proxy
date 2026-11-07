@@ -9,6 +9,7 @@ from app.middleware.auth import get_current_user
 from app.middleware.error_handler import render_cyberpunk_error_page
 from app.middleware.rate_limit import check_rate_limit
 from app.proxy.cache_manager import asset_cache
+from app.proxy.css_rewriter import rewrite_css
 from app.proxy.fetcher import (
     ProxyFetcher,
     ResponseTooLargeError,
@@ -142,17 +143,44 @@ async def proxy_fetch_endpoint(
         usage_service.record_usage(user_id, payload_size)
         log_proxy_access(user_id, result.final_url, result.status_code, payload_size)
 
+        # Cache safe asset types only. NOTE: text/css deliberately excluded —
+        # CSS must be rewritten on every request, so we do not cache the raw body.
         if result.status_code == 200 and any(
             t in content_type for t in
-            ("image/", "font/", "javascript", "text/css", "application/json")
+            ("image/", "font/", "javascript", "application/json")
         ):
             asset_cache.set(cache_key, result.content, content_type)
+
+        # ------------------------------------------------------- CSS RESPONSE
+        if "text/css" in content_type:
+            css_text = result.content.decode("utf-8", errors="replace")
+            proxy_origin = str(request.base_url).rstrip("/")
+            try:
+                css_text = rewrite_css(
+                    css_text, result.final_url, node, proxy_origin=proxy_origin
+                )
+            except Exception as exc:
+                logger.warning(
+                    "css_rewriter fail url=%s cls=%s msg=%s (serving raw)",
+                    result.final_url, exc.__class__.__name__, exc,
+                )
+            headers = {
+                k: v for k, v in result.headers.items()
+                if k.lower() not in ("cache-control", "etag", "last-modified")
+            }
+            headers["Cache-Control"] = "no-store"
+            return Response(
+                content=css_text.encode("utf-8"),
+                status_code=result.status_code,
+                headers=headers,
+                media_type="text/css",
+            )
 
         # ------------------------------------------------------- HTML RESPONSE
         if "text/html" in content_type:
             html_text = result.content.decode("utf-8", errors="replace")
             proxy_origin = str(request.base_url).rstrip("/")
-            
+
             try:
                 html_text = rewrite_html_links(
                     html_text, result.final_url, node, proxy_origin=proxy_origin
