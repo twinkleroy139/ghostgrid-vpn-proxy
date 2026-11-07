@@ -21,6 +21,7 @@ from app.proxy.shim import inject_into_html
 from app.proxy.stream_handler import stream_upstream_content
 from app.proxy.url_encoder import decode_url
 from app.proxy.vpn_manager import vpn_manager
+from app.proxy.waf_detector import classify_target_for_ui, detect_waf_challenge
 from app.proxy.ws_proxy import proxy_websocket
 from app.security.adblock import is_ad_or_tracker
 from app.services.history_service import history_service  # noqa: F401
@@ -33,9 +34,55 @@ router = APIRouter(prefix="/proxy", tags=["Proxy Core"])
 fetcher = ProxyFetcher()
 settings = get_settings()
 
+# Extensions that indicate a subresource (never block these, even on WAF hosts).
+SUBRESOURCE_EXTS = (
+    ".css", ".js", ".mjs", ".map",
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".ico",
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    ".mp4", ".webm", ".ogg", ".mp3", ".wav",
+    ".json", ".xml", ".txt",
+)
+
+
+def _is_subresource(url: str) -> bool:
+    try:
+        path = url.lower().split("?", 1)[0].split("#", 1)[0]
+        return any(path.endswith(ext) for ext in SUBRESOURCE_EXTS)
+    except Exception:
+        return False
+
+
+def _waf_error_page(vendor: str, target_url: str) -> HTMLResponse:
+    """Render the GhostGrid 'incompatible site' page."""
+    return render_cyberpunk_error_page(
+        502,
+        f"WAF SHIELD [{vendor.upper()}]",
+        (
+            f"This site is protected by {vendor} bot detection, which requires "
+            "a real browser with JavaScript execution. GhostGrid runs on the "
+            "server side and cannot pass JS challenges. Try a different site, "
+            "or open this URL directly in your browser."
+        ),
+        target_url,
+    )
+
+
+def _quiet_subresource_bypass(url: str, payload: bytes, media_type: str) -> Response:
+    """Return a harmless stub with the CORRECT media type (kills MIME errors)."""
+    return Response(
+        content=payload,
+        media_type=media_type,
+        headers={"Cache-Control": "no-store"},
+    )
+
 
 def _quiet_js_bypass(url: str, payload: bytes = b"/* GhostGrid bypassed */") -> Response:
-    """Return a harmless JS body when a .js asset is rejected (SSRF / error)."""
+    """Backwards-compatible helper — dispatches to proper media type."""
+    if _is_subresource(url):
+        if url.lower().split("?", 1)[0].endswith(".css"):
+            return _quiet_subresource_bypass(url, b"/* GhostGrid bypassed */", "text/css")
+        if url.lower().split("?", 1)[0].endswith((".js", ".mjs")):
+            return _quiet_subresource_bypass(url, payload, "application/javascript")
     if url.endswith(".js") or "javascript" in url:
         return Response(content=payload, media_type="application/javascript")
     return None  # type: ignore[return-value]
@@ -65,16 +112,10 @@ async def connect_node(
     node: str = Query(..., description="Node ID to connect"),
     current_user: dict = Depends(get_current_user),
 ):
-    """
-    Explicitly start the VPN for the requested node.
-    Runs synchronously (blocks up to ~20s while Wireproxy binds), so the
-    frontend shows CONNECTING and updates after this returns.
-    """
     user_id = current_user.get("uid", "guest_operative")
     logger.info("connect_node user=%s node=%s", user_id, node)
 
     if node == "direct":
-        # Direct node needs no tunnel.
         return JSONResponse({"connected": False, "node": "direct", "error": None})
 
     ok = vpn_manager.connect_node(node)
@@ -85,13 +126,11 @@ async def connect_node(
             status_code=503,
         )
 
-    status = vpn_manager.get_status()
-    return JSONResponse(status)
+    return JSONResponse(vpn_manager.get_status())
 
 
 @router.post("/disconnect")
 async def disconnect_node(current_user: dict = Depends(get_current_user)):
-    """Explicitly stop the active VPN tunnel."""
     user_id = current_user.get("uid", "guest_operative")
     logger.info("disconnect_node user=%s", user_id)
     vpn_manager.disconnect()
@@ -100,7 +139,6 @@ async def disconnect_node(current_user: dict = Depends(get_current_user)):
 
 @router.get("/status")
 async def vpn_status():
-    """Return current VPN status — safe to poll every 1–2 seconds."""
     return JSONResponse(vpn_manager.get_status())
 
 
@@ -130,6 +168,19 @@ async def proxy_fetch_endpoint(
 
     if raw_target_url.endswith(".map"):
         return Response(status_code=204)
+
+    # --------------------------------------------------- WAF PRE-FLIGHT (top-level only)
+    # Block known-WAF hosts BEFORE fetching, but ONLY for top-level navigations.
+    # Subresources (CSS/JS/images from those same hosts) must still load,
+    # otherwise the (broken) page has no styling, which looks worse than the message.
+    if not _is_subresource(raw_target_url):
+        known = classify_target_for_ui(raw_target_url)
+        if known:
+            logger.warning(
+                "WAF pre-flight block: vendor=%s host=%s url=%s",
+                known["vendor"], known["host"], raw_target_url,
+            )
+            return _waf_error_page(known["vendor"], raw_target_url)
 
     client_headers = dict(request.headers)
 
@@ -198,6 +249,38 @@ async def proxy_fetch_endpoint(
         usage_service.record_usage(user_id, payload_size)
         log_proxy_access(user_id, result.final_url, result.status_code, payload_size)
 
+        # --------------------------------------------------- WAF POST-DETECT
+        # If the upstream returned a challenge body, replace it with our message.
+        # But ONLY for top-level navigations — subresources get a stub below.
+        if not _is_subresource(raw_target_url):
+            vendor = detect_waf_challenge(
+                result.content, result.status_code, content_type, result.final_url,
+            )
+            if vendor:
+                logger.warning(
+                    "WAF post-detect block: vendor=%s url=%s status=%d",
+                    vendor, result.final_url, result.status_code,
+                )
+                return _waf_error_page(vendor, raw_target_url)
+
+        # --------------------------------------------------- MIME MISMATCH STUB
+        # If a .css / .js request came back as HTML (WAF block page or error),
+        # return an empty stub with the CORRECT content type. Prevents the
+        # browser console error cascade ("Refused to apply style... MIME mismatch").
+        lower_path = raw_target_url.lower().split("?", 1)[0]
+        if "text/html" in content_type:
+            if lower_path.endswith(".css"):
+                return _quiet_subresource_bypass(
+                    raw_target_url, b"/* GhostGrid: upstream returned HTML for a CSS request */",
+                    "text/css",
+                )
+            if lower_path.endswith((".js", ".mjs")):
+                return _quiet_subresource_bypass(
+                    raw_target_url, b"/* GhostGrid: upstream returned HTML for a JS request */",
+                    "application/javascript",
+                )
+
+        # --------------------------------------------------- NORMAL CACHE
         if result.status_code == 200 and any(
             t in content_type for t in
             ("image/", "font/", "javascript", "application/json")
